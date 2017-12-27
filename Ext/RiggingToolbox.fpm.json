@@ -1,0 +1,44 @@
+{
+  "code": [
+    "Math/bezierXfo.kl",
+    "Math/softLimit.kl",
+    "Math/softClamp.kl",
+    "Math/pivotDistanceLimit.kl",
+    "Kinematics/solveNCFIK.kl",
+    
+    "GeometryStack/Shaders/OGLFlatOverlayShader.kl",
+    "GeometryStack/Shaders/OGLVertexColorOverlayShader2.kl",
+    "GeometryStack/Manipulation/Weightmap2.kl",
+    "GeometryStack/Alembic/AlembicIWStringArrayProperty.kl",
+
+    "GeometryStack/GeometryHelperFunctions.kl",
+    "GeometryStack/StatisticsHelperFunctions.kl",
+    "GeometryStack/Listener.kl",
+    "GeometryStack/Notifier.kl",
+    "GeometryStack/GeometrySet.kl",
+    "GeometryStack/GeometryOperator.kl",
+    "GeometryStack/Generator.kl",
+    "GeometryStack/Modifier.kl",
+    "GeometryStack/CachePoint.kl",
+    "GeometryStack/GeometryCache.kl",
+    "GeometryStack/GeometryAttributeCache.kl",
+    "GeometryStack/GeometryStack.kl",
+
+    "GeometryStack/Generators/PolygonMeshPlaneGenerator.kl",
+    "GeometryStack/Generators/PolygonMeshSphereGenerator.kl",
+    "GeometryStack/Generators/AlembicGeometryGenerator.kl",
+    "GeometryStack/Generators/AlembicSkinnedMeshGeometryGenerator.kl",
+
+    "GeometryStack/Modifiers/PushModifier.kl",
+    "GeometryStack/Modifiers/ComputeNormalsModifier.kl",
+    "GeometryStack/Modifiers/ComputeTangentsModifier.kl",
+    "GeometryStack/Modifiers/WeightmapModifier.kl",
+    
+    "GeometryStack/Modifiers/SkinningModifier.kl",
+    "GeometryStack/Modifiers/BlendShapesModifier.kl",
+    "GeometryStack/Modifiers/DeltaMushModifier.kl",
+    "GeometryStack/Modifiers/WrapModifier.kl",
+
+    "GeometryStack/RiggingToolboxRegistry.kl"
+  ]
+}

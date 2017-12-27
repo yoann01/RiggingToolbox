@@ -1,0 +1,33 @@
+{
+  "geomOperators": [
+    {
+     "type": "AlembicSkinnedMeshGeometryGenerator",
+     "filePath": "skinnedTube.abc",
+     "geometryNames": ["pCylinderShape1"]
+    },
+    {
+     "type": "SkinningModifier"
+    },
+    {
+     "type": "WeightmapModifier",
+     "weightmapName": "DeltaMushMask"
+    },
+    {
+     "type": "DeltaMushModifier",
+     "iterations": 30,
+     "filePath": "skinnedTube.abc",
+     "referenceGeometryNames": ["pCylinderShape1"],
+     "maskWeightmapName": "DeltaMushMask",
+     "displayDebugging": true
+    },
+    {
+     "type": "ComputeNormalsModifier",
+     "hardAngle": 3.1,
+     "displayDebugging": false
+    },
+    {
+     "type": "ComputeTangentsModifier",
+     "hardAngle": 3.1
+    }
+  ]
+}

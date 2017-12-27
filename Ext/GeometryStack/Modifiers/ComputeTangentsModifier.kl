@@ -1,0 +1,52 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+//////////////////////////////////////
+// Factory definition.
+
+object ComputeTangentsModifierFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator ComputeTangentsModifierFactory.constructGeometryOperator(){
+  ComputeTangentsModifier geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+
+object ComputeTangentsModifier : BaseModifier {
+  Scalar hardAngleRadians;
+};
+
+
+function UInt32[String] ComputeTangentsModifier.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_Read;
+  result['uvs0'] = AttrMode_Read;
+  result['tangents'] = AttrMode_Write;
+  return result;
+}
+
+/// Per-geometry computation of the push. 
+/// \internal
+operator computeTangentsModifier_deformGeometries<<<index>>>(
+  io GeometrySet geomSet
+){
+  PolygonMesh mesh = geomSet.get(index);
+  if(mesh)
+    mesh.recomputeTangentsIfRequired();
+}
+
+function ComputeTangentsModifier.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+  computeTangentsModifier_deformGeometries<<<geomSet.size()>>>(geomSet);
+}
+
+

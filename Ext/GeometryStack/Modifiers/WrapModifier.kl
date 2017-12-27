@@ -1,0 +1,345 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+require Manipulation;
+require Parameters;
+
+//////////////////////////////////////
+// Factory definition.
+
+object WrapModifierFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator WrapModifierFactory.constructGeometryOperator(){
+  WrapModifier geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+// the WrapModifier is a Listener because it can listen to changes in the influence object
+object WrapModifier : BaseModifier, Listener {
+  GeometryLocation locations[][];
+  Vec3 positionDeltas[][];
+  Vec3 normalDeltas[][];
+  GeometryStack influenceGeometryStack;
+
+  Boolean bound;
+  UInt32 boundVersion;
+  UInt32 srcBoundVersion;
+
+
+  Boolean displayDebugging;
+  Lines debugLines[];
+  DrawingHandle handle;
+};
+
+
+function WrapModifier(){
+}
+
+function UInt32[String] WrapModifier.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_ReadWrite;
+  return result;
+}
+
+function WrapModifier.notify!(Notifier notifier, String type, String data) {
+  AutoProfilingEvent p(FUNC+":" + notifier.type() + "." +type);
+  switch(type){
+  case 'changed':
+    if(this.influenceGeometryStack === notifier){
+      // The influence stack has changed, so we need to dirty our own stack. 
+      // send a 'changed' event so our own stack is dirtied from this point up.
+      this.notify('changed', data);
+    }
+    break;
+  }
+}
+
+function WrapModifier.setSourceGeomStack!(GeometryStack influenceGeometryStack){
+  if(this.influenceGeometryStack !== influenceGeometryStack){
+    if(this.influenceGeometryStack != null)
+      this.influenceGeometryStack.removeListener(this);
+    // Add 'this' as a listener so we get notified when the influence stack is edited. 
+    this.influenceGeometryStack = influenceGeometryStack;
+    this.influenceGeometryStack.addListener(this);
+
+    this.bound = false;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+function WrapModifier.setDisplayDebugging!(Boolean displayDebugging){
+  if(this.displayDebugging != displayDebugging){
+    this.displayDebugging = displayDebugging;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+function Mat44 wrapModifier_buildRefFrame(
+  PolygonMesh srcMesh,
+  Vec3Attribute srcPositionsAttribute,
+  Vec3Attribute srcNormalsAttribute,
+  Vec4Attribute srcTangentsAttribute,
+  GeometryLocation location
+  ){
+
+  LocalL16UInt32Array attributeIndices;
+  LocalL16ScalarArray weights;
+  srcMesh.getLocationAttributeIndicesAndWeights( location, attributeIndices, weights );
+
+  Vec3 pos = srcPositionsAttribute.getLinearCombination( attributeIndices, weights );
+  Vec3 nrm = srcNormalsAttribute.getLinearCombination( attributeIndices, weights );
+  Vec4 tgt = srcTangentsAttribute.getLinearCombination( attributeIndices, weights );
+
+  Quat q;
+  q.setFromDirectionAndUpvector(nrm, Vec3(tgt.x, tgt.y, tgt.z));
+  Mat44 m;
+  m.set(pos, q.toMat33(), Vec3(1,1,1));
+  return m;
+}
+
+
+
+operator wrapModifier_computeBinding<<<index>>>(
+  PolygonMesh srcMesh,
+  Vec3Attribute srcPositionsAttribute,
+  Vec3Attribute srcNormalsAttribute,
+  Vec4Attribute srcTangentsAttribute,
+  io GeometryLocation locations[],
+  io Vec3 positionDeltas[],
+  io Vec3 normalDeltas[],
+  Vec3 positions[],
+  Vec3 normals[],
+  Mat44 globalTransform
+){
+  Vec3 position = globalTransform * positions[index];
+  Vec3 normal = globalTransform.upperLeft() * normals[index];
+  GeometryLocation location = srcMesh.getClosest( position, Vec3(1.0, 1.0, 1.0), SCALAR_INFINITE );
+
+  // Build a reference frame.  
+  Mat44 mat44 = wrapModifier_buildRefFrame(srcMesh, srcPositionsAttribute, srcNormalsAttribute, srcTangentsAttribute, location);
+
+  positionDeltas[index] = mat44.inverse() * position;
+  normalDeltas[index] = mat44.upperLeft().inverse() * normal;
+  locations[index] = location;
+}
+
+operator wrapModifier_applyDeltas<<<index>>>(
+  PolygonMesh srcMesh,
+  Vec3Attribute srcPositionsAttribute,
+  Vec3Attribute srcNormalsAttribute,
+  Vec4Attribute srcTangentsAttribute,
+  GeometryLocation locations[],
+  Vec3 positionDeltas[],
+  Vec3 normalDeltas[],
+  io Vec3 positions[],
+  io Vec3 normals[],
+  
+  Boolean displayDebugging,
+  io Lines debugLines
+){
+  GeometryLocation location = locations[index];
+
+  Mat44 mat44 = wrapModifier_buildRefFrame(srcMesh, srcPositionsAttribute, srcNormalsAttribute, srcTangentsAttribute, location);
+  Vec3 newPos = mat44 * positionDeltas[index];
+  positions[index] = newPos;
+  normals[index] = mat44.upperLeft() * normalDeltas[index];
+
+  if(displayDebugging){
+    debugLines.indices[(index*2)] = (index*2);
+    debugLines.indices[(index*2)+1] = (index*2)+1;
+    debugLines.setPosition((index*2), mat44.translation());
+    debugLines.setPosition((index*2)+1, newPos);
+  }
+}
+
+
+operator wrapModifier_deformGeometries<<<index>>>(
+  io GeometrySet geomSet,
+  GeometrySet srcGeomSet,
+  io GeometryLocation locations[][],
+  io Vec3 positionDeltas[][],
+  io Vec3 normalDeltas[][],
+  Boolean bound,
+  Boolean displayDebugging,
+  io Lines debugLines[]
+){
+  PolygonMesh srcMesh = srcGeomSet.get(0);
+  if(!srcMesh){
+    // Note: The source GeometrySet could contain multiple meshes to deform the target geoms.
+    // There could be a mapping generates from the target meshes to the source meshes on a per-point
+    // basis. For now we just expect one polymesh as the source. 
+    report("Warning in wrapModifier_deformGeometries: Source GeometrySet does not contain a polygon mesh.");
+    return;
+  }
+  Geometry geometry = geomSet.get(index);
+  Ref<GeometryAttributes> attributes = geometry.getAttributes();
+  Vec3Attribute positionsAttribute = attributes.positionsAttribute;
+  Vec3Attribute normalsAttribute = attributes.normalsAttribute;
+
+  if(displayDebugging){
+    if(debugLines[index] == null)
+      debugLines[index] = Lines();
+    if(debugLines[index].lineCount() != positionsAttribute.size()){
+      debugLines[index].attributes.resize( positionsAttribute.size() * 2 );
+      debugLines[index].indices.resize( positionsAttribute.size() * 2 );
+      debugLines[index].incrementVersion();
+    }
+    // Always increment the positoins version as they will be re-geomuted in the following kernel.
+    debugLines[index].incrementPositionsVersion();
+  }
+
+
+  // Gather the attributes from the source mesh that will be used to 
+  // drive the point positions of the target meshes.
+  Ref<Vec3Attribute> srcPositionsAttribute = srcMesh.positionsAttribute;
+  Ref<Vec3Attribute> srcNormalsAttribute = srcMesh.normalsAttribute;
+  Ref<Vec4Attribute> srcTangentsAttribute = srcMesh.getAttribute("tangents");
+
+  if(!srcNormalsAttribute || !srcTangentsAttribute){
+    if(!srcNormalsAttribute)
+      report("Warning: Influence Mesh does not have Normals.");
+    if(!srcTangentsAttribute)
+      report("Warning: Influence Mesh does not have Tangents.");
+    return;
+  }
+
+  if(!bound){
+    GenericValueContainer options = GenericValueContainer();
+    PrepareForSpatialQueries_setSparseGrid(options);
+
+    srcMesh.prepareForSpatialQueries(positionsAttribute.size(), options );
+    Ref<SpatialQuery> query = srcMesh.beginSpatialQuery();
+
+    locations[index].resize(positionsAttribute.size());
+    positionDeltas[index].resize(positionsAttribute.size());
+    normalDeltas[index].resize(positionsAttribute.size());
+
+    ThreadsafeMetaDataContainer metaData = getGeomMetaData(geometry);
+    Mat44Param globalTransform = metaData.get('globalTransform');
+
+    wrapModifier_computeBinding<<<positionsAttribute.size()>>>(
+      srcMesh,
+      srcPositionsAttribute,
+      srcNormalsAttribute,
+      srcTangentsAttribute,
+      locations[index],
+      positionDeltas[index],
+      normalDeltas[index],
+      positionsAttribute.values,
+      normalsAttribute.values,
+      globalTransform.getValue()
+    );
+    srcMesh.endSpatialQuery(query);
+  }
+
+  wrapModifier_applyDeltas<<<positionsAttribute.size()>>>(
+    srcMesh,
+    srcPositionsAttribute,
+    srcNormalsAttribute,
+    srcTangentsAttribute,
+    locations[index],
+    positionDeltas[index],
+    normalDeltas[index],
+    positionsAttribute.values,
+    normalsAttribute.values,
+
+    displayDebugging,
+    debugLines[index]
+  );
+  positionsAttribute.incrementVersion();
+}
+
+function WrapModifier.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+
+  if(this.influenceGeometryStack == null){
+    report('Warning: no influence stack set on WrapModifier.');
+    return;
+  }
+
+  GeometrySet srcGeomSet = this.influenceGeometryStack.evaluate(context);
+  if(srcGeomSet.size() == 0){
+    // Note: The source GeometrySet could contain multiple meshes to deform the target geoms.
+    // There could be a mapping generates from the target meshes to the source meshes on a per-point
+    // basis. For now we just expect one polymesh as the source. 
+    setError("Warning in wrapModifier_deformGeometries: Source GeometrySet contains zero geometries.");
+    return;
+  }
+  if(srcGeomSet.getVersion() != this.srcBoundVersion || geomSet.getVersion() != this.boundVersion){
+    this.locations.resize(geomSet.size());
+    this.positionDeltas.resize(geomSet.size());
+    this.normalDeltas.resize(geomSet.size());
+    this.debugLines.resize(geomSet.size());
+    this.bound = false;
+  }
+
+  {
+    AutoProfilingEvent p2("wrapModifier_deformGeometries");
+    wrapModifier_deformGeometries<<<geomSet.size()>>>(
+      geomSet, 
+      srcGeomSet,
+      this.locations,
+      this.positionDeltas,
+      this.normalDeltas,
+      this.bound,
+      this.displayDebugging,
+      this.debugLines
+      );
+  }
+
+  if(!this.bound){
+    this.srcBoundVersion = srcGeomSet.getVersion();
+    this.boundVersion = geomSet.getVersion();
+    this.bound = true;
+  }
+
+  if(this.displayDebugging && this.handle==null)
+    this.setupRendering();
+  else if(!this.displayDebugging && this.handle!=null)
+    this.handle = null;
+}
+
+
+
+function WrapModifier.setupRendering!(){
+
+  // Construct a handle for this character instance. The handle will clean up the InlineDrawing when it is destroyed. 
+  this.handle = DrawingHandle("WrapModifierHandle");
+
+  // Now setup the rendering
+  InlineShader shader = this.handle.getDrawing().registerShader(OGLFlatOverlayShader());
+  InlineMaterial material = shader.getOrCreateMaterial("WrapModifierMaterial");
+
+  for(Integer geomId=0; geomId<this.debugLines.size(); geomId++){
+    String name = "WrapModifier_" + String(geomId);
+    InlineShape shape = InlineLinesShape(name, this.debugLines[geomId]);
+    InlineInstance instance = SimpleInlineInstance(name + "_Instance", this.handle.rootTransform, shape, material);
+    instance.setInstanceUniform(InlineUniform('u_color', Color(1.0,1.0,0.0)));
+  }
+}
+
+
+
+function JSONDictValue WrapModifier.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json = this.parent.saveJSON(persistenceContext);
+  json.setBoolean('displayDebugging', this.displayDebugging);
+  return json;
+}
+
+function WrapModifier.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  this.parent.loadJSON(persistenceContext, json);
+  if(json.has('displayDebugging'))
+    this.displayDebugging = json.getBoolean('displayDebugging');
+}
+
+

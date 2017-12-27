@@ -1,0 +1,84 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+
+object GeometryAttributeCache : CachePoint, Listener  {
+  BaseModifier modifier;
+
+  String attributesNames[];
+  GeometryAttribute cachedAttributes[][];
+  UInt32 attributeGenerations[][];
+};
+
+function GeometryAttributeCache(BaseModifier modifier) {
+  // Add a listener to know when we should update the cached attribute interaction types. 
+  this.modifier = modifier;
+  Listener listener = this; // No implicit casting in KL from objects to interfaces.
+  this.modifier.addListener(listener);
+  this.updateCachedAttributeNames();
+}
+
+// Recieves a notification from one of the notifiers. 
+// This will always be the geometry operator.
+function GeometryAttributeCache.notify!(Notifier notifier, String type, String data) {
+  this.updateCachedAttributeNames();
+}
+
+  
+function GeometryAttributeCache.updateCachedAttributeNames!() {
+  UInt32 deps[String] = this.modifier.getAttributeInteractions();
+  this.attributesNames.resize(0);
+  for(key, value in deps){
+    if(value == AttrMode_ReadWrite)
+      this.attributesNames.push(key);
+  }
+}
+
+/// Restores the geometry attributes to the state found in the cache.
+function GeometryAttributeCache.update!(io GeometrySet geomSet, GeometryOperator op) {
+  AutoProfilingEvent p(FUNC+":"+this.attributesNames);
+
+
+  UInt32 numGeoms = geomSet.size();
+  UInt32 numcachedAttrs = this.attributesNames.size();
+  this.cachedAttributes.resize(numGeoms);
+  this.attributeGenerations.resize(numGeoms);
+
+  for(Integer i=0; i<numGeoms; i++){
+    Ref<GeometryAttributes> attributes = geomSet.get(i).getAttributes();
+    this.cachedAttributes[i].resize(numcachedAttrs);
+    this.attributeGenerations[i].resize(numcachedAttrs);
+    for(Integer j=0; j<numcachedAttrs; j++){
+      String attrName = this.attributesNames[j];
+      Ref<GeometryAttribute> attr = attributes.getAttribute(attrName);
+      UInt32 gen = geomSet.getAttributeGeneration(attrName);
+      UInt32 cachedGen = this.attributeGenerations[i][j];
+      if(this.cachedAttributes[i][j].type() != attr.type() || cachedGen >= gen){
+        // Update the cached attribute to the new value.
+        AutoProfilingEvent pUpdate("Update:"+attrName);
+
+        this.cachedAttributes[i][j] = cloneAttribute(attr);
+        this.attributeGenerations[i][j] = gen;
+      }
+      else if(cachedGen < gen){
+        // Restore the attribute to its previous value.
+        AutoProfilingEvent pRestore("Restore:"+attrName);
+
+        Ref<Object> cachedAttr = this.cachedAttributes[i][j];
+        attr.copyFrom( cachedAttr );
+        geomSet.setAttributeGeneration(attrName, cachedGen);
+      }
+    }
+  }
+}
+
+
+function GeometryAttributeCache.free!(){
+  AutoProfilingEvent p(FUNC);
+  this.cachedAttributes.resize(0);
+  this.attributeGenerations.resize(0);
+}

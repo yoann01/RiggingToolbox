@@ -1,0 +1,31 @@
+
+require RiggingToolbox;
+
+operator entry(){
+    
+  GeometryStack stack();
+  PolygonMeshSphereGenerator sphereGenerator(2.0, 1, true, true);
+  PushModifier pushModifier(3.0);
+  stack.addGeometryOperator(sphereGenerator);
+  stack.addGeometryOperator(pushModifier);
+
+  EvalContext context();
+  {
+    GeometrySet geomSet = stack.evaluate(context);
+
+    report("NumGeometries:" + geomSet.size);
+    for(Integer i=0; i<geomSet.size; i++){
+      report(geomSet.get(i).getDesc(true, true));
+    }
+  }
+  
+  {
+    GeometrySet geomSet = stack.evaluate(context);
+
+    report("NumGeometries:" + geomSet.size);
+    for(Integer i=0; i<geomSet.size; i++){
+      report(geomSet.get(i).getDesc(true, true));
+    }
+  }
+}
+

@@ -1,0 +1,48 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+interface Modifier {
+};
+
+object BaseModifier : Notifier, Modifier, GeometryOperator {
+
+};
+
+
+function UInt32[String] BaseModifier.getAttributeInteractions(){
+  UInt32 result[String];
+  return result;
+}
+
+
+function BaseModifier.evaluate!(EvalContext context, io GeometrySet geomSet){
+
+}
+
+
+function JSONDictValue BaseModifier.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json();
+
+  json.setString("type", String(this.type()));
+
+  return json;
+}
+
+
+function BaseModifier.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  
+}
+
+/// Generates a Description string of this modifier. Used in debugging and unit testing.
+/// \param indent The indentation to use when generating the string. 
+function String BaseModifier.getDesc(String indent) {
+  String desc;
+  desc += indent + "{ \n";
+  desc += indent + "  type: "+ this.type() + "\n";
+  desc += indent + "}";
+  return desc;
+}

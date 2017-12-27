@@ -1,0 +1,34 @@
+Importing:D:/Projects/FabricEngineInc/RiggingToolbox/Tests/GeometryStack/Resources/skinnedTube.abc
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryCache.update!(io GeometrySet, GeometryOperator)
+--function AlembicSkinnedMeshGeometryGenerator.evaluate!(EvalContext, io GeometrySet)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Update:positions
+--function SkinningModifier.evaluate!(EvalContext, io GeometrySet)
+function GeometryStack.notify!(Notifier, String, String):SkinningModifier.changed
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Restore:positions
+--function SkinningModifier.evaluate!(EvalContext, io GeometrySet)
+
+stack:GeometryStack {
+  geomOperators:[
+    {
+      type: AlembicSkinnedMeshGeometryGenerator,
+      filePath: ${FABRIC_RIGGINGTOOLBOX_PATH}/Tests/GeometryStack/Resources/skinnedTube.abc
+      expandedPath: D:/Projects/FabricEngineInc/RiggingToolbox/Tests/GeometryStack/Resources/skinnedTube.abc
+    }
+    {
+      type: SkinningModifier
+    }
+  ],
+  geomSet:   {
+    geometries:[
+      pCylinderShape1:{
+      },
+    ]
+    attributeGenerations:{
+      positions:2,
+    },
+  }
+}

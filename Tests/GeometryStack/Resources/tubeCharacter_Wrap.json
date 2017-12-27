@@ -1,0 +1,17 @@
+{
+  "geomOperators": [
+    {
+     "type": "AlembicGeometryGenerator",
+     "filePath": "skinnedTube.abc",
+     "geometryNames": ["pPlaneShape*"]
+    },
+    {
+     "type": "WrapModifier",
+     "displayDebugging": true
+    },
+    {
+     "type": "ComputeNormalsModifier",
+     "hardAngle": 3.1
+    }
+  ]
+}

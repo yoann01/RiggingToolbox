@@ -1,0 +1,14 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+interface CachePoint  {
+  update!(io GeometrySet geomSet, GeometryOperator op);
+
+  // Free all memory in the cache.
+  free!();
+};
+

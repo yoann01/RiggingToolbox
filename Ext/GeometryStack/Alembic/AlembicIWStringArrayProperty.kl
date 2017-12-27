@@ -1,0 +1,99 @@
+/*
+ *  Copyright 2010-2014 Fabric Software Inc. All rights reserved.
+ */
+
+require Alembic;
+require AlembicWrapper;
+
+object AlembicIWStringArrayProperty {
+  AlembicIArrayProperty prop;
+};
+
+function AlembicIWStringArrayProperty(AlembicICompoundProperty parent, String name) {
+  this.prop = AlembicIArrayProperty(parent, name);
+}
+
+function AlembicIWStringArrayProperty(AlembicIArrayProperty prop) {
+  this.prop = prop;
+}
+
+function Boolean AlembicIWStringArrayProperty.valid() {
+  return this.prop.valid();
+}
+
+function AlembicIWStringArrayProperty.reset!() {
+  this.prop.reset();
+}
+
+function AlembicPropertyHeader AlembicIWStringArrayProperty.getHeader() {
+  return this.prop.getHeader();
+}
+
+function String AlembicIWStringArrayProperty.getName() {
+  return this.prop.getName();
+}
+
+function AlembicPropertyType AlembicIWStringArrayProperty.getPropertyType() {
+  return this.prop.getPropertyType();
+}
+
+function Boolean AlembicIWStringArrayProperty.isScalar() {
+  return this.prop.isScalar();
+}
+
+function Boolean AlembicIWStringArrayProperty.isArray() {
+  return this.prop.isArray();
+}
+
+function Boolean AlembicIWStringArrayProperty.isCompound() {
+  return this.prop.isCompound();
+}
+
+function Boolean AlembicIWStringArrayProperty.isSimple() {
+  return this.prop.isSimple();
+}
+
+function AlembicMetaData AlembicIWStringArrayProperty.getMetaData() {
+  return this.prop.getMetaData();
+}
+
+function AlembicDataType AlembicIWStringArrayProperty.getDataType() {
+  return this.prop.getDataType();
+}
+
+function AlembicTimeSampling AlembicIWStringArrayProperty.getTimeSampling() {
+  return this.prop.getTimeSampling();
+}
+
+function AlembicIObject AlembicIWStringArrayProperty.getObject() {
+  return this.prop.getObject();
+}
+
+function UInt32 AlembicIWStringArrayProperty.getNumSamples() {
+  return this.prop.getNumSamples();
+}
+function Boolean AlembicIWStringArrayProperty.isConstant() {
+  return this.prop.isConstant();
+}
+function AlembicICompoundProperty AlembicIWStringArrayProperty.getParent() {
+  return this.prop.getParent();
+}
+
+function String[] AlembicIWStringArrayProperty.get(AlembicISampleSelector iSS) {
+  AlembicDataType dt = this.getDataType();
+  String values[];
+  if(dt.getExtent() != 1) {
+    setError('AlembicIWStringArrayProperty.get: Extent != 1.');
+    return values;
+  }
+  if(dt.getPod() == Alembic_kWstringPOD)
+    values = this.prop.getAsString(iSS);
+  else
+    setError('AlembicIWStringArrayProperty.get: Encapsulated AlembicIArrayProperty has invalid POD.');
+  return values;
+}
+
+function String[] AlembicIWStringArrayProperty.get() {
+  return this.get(AlembicISampleSelector(0));
+}
+

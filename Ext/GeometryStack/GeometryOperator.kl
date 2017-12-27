@@ -1,0 +1,71 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+const UInt32 AttrMode_Read = 0;
+const UInt32 AttrMode_Write = 1;
+const UInt32 AttrMode_ReadWrite = 2;
+
+
+/**
+  A GeometryOperator can generate or modify geomety in the geometry stack.
+  The GeometryStack manages a sequence of these operators, evaluating and caching thier results during scene playback. 
+
+  \seealso GeometryOperator, RiggingToolboxRegistry, GeometryStack
+*/
+interface GeometryOperator {
+  
+  // Returns the list of attributes that the geomery operator is interacting with in some way. 
+  // Generators will usually write a collection of attributes, while Modifiers will read and write 
+  // attributes. This dictionary is used to determine where caching should occur in the geometry stack.
+  UInt32[String] getAttributeInteractions();
+
+  // Evaluate the operator modifying the geomSet
+  evaluate!(EvalContext context, io GeometrySet geomSet);
+
+  // Save data from the geometry operator to a JSON dictionary.
+  JSONDictValue saveJSON(PersistenceContext persistenceContext);
+
+  // Load data into the geometry operator from a parsed JSON file.
+  loadJSON!(PersistenceContext persistenceContext, JSONDictValue json);
+
+  /// Generates a Description string of this modifier. Used in debugging and unit testing.
+  /// \param indent The indentation to use when generating the string. 
+  String getDesc(String indent);
+};
+
+
+/**
+  A GeometryOperatorFactory is responsible to constructing GeometryOperators/
+  For each type of geometry operator, we have a factory object 
+  that is constructed and registered in the RiggingToolboxRegistry.
+  This enables the RiggingToolboxRegistry to construct any operator
+  as it loads. 
+
+  \example
+
+    require Geometry;
+
+    object MyGeomOp : GeometryOperator {
+      Scalar data;
+    };
+
+
+    object MyGeomOpFactory : GeometryOperatorFactory {
+    };
+
+    function GeometryOperator MyGeomOpFactory.constructGeometryOperator(){
+      MyGeomOp geomOp();
+      return geomOp;
+    }
+
+  \endexample
+
+  \seealso GeometryOperatorFactory, RiggingToolboxRegistry, GeometryStack
+*/
+interface GeometryOperatorFactory {
+  GeometryOperator constructGeometryOperator();
+};

@@ -1,0 +1,39 @@
+
+require RiggingToolbox;
+
+operator entry(){
+
+  StartFabricProfiling();
+  EvalContext context();
+
+  GeometryStack skinningStack();
+  skinningStack.loadJSONFile("${FABRIC_RIGGINGTOOLBOX_PATH}/Tests/GeometryStack/Resources/CaptainAtom_Skinning.json");
+
+  GeometryStack wrapStack();
+  wrapStack.loadJSONFile("${FABRIC_RIGGINGTOOLBOX_PATH}/Tests/GeometryStack/Resources/CaptainAtom_Wrapped.json");
+
+  WrapModifier wrapModifier = wrapStack.getGeometryOperator(1);
+  wrapModifier.setSourceGeomStack(skinningStack);
+
+  SkinningModifier skiningModifier = skinningStack.getGeometryOperator(1);
+
+  // // Modify the pose and then reevaluate. 
+  // Mat44 pose[];
+  // pose.resize(106);
+  // for(UInt32 i=0; i<106; i++){
+  //   pose[i] = Xfo(Vec3(i, 0, 0)).toMat44();
+
+  // }
+  // skiningModifier.setPose(pose);
+
+  wrapStack.evaluate(context);
+
+  StopFabricProfiling();
+
+  report( GetEvalPathReport() );
+
+  report("skinningStack:" + skinningStack.getDesc('', false));
+  // report("wrapStack:" + wrapStack.getDesc());
+  
+}
+

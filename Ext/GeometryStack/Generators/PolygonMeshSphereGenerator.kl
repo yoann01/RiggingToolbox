@@ -1,0 +1,66 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+require FabricStatistics;
+
+//////////////////////////////////////
+// Factory definition.
+
+object PolygonMeshSphereGeneratorFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator PolygonMeshSphereGeneratorFactory.constructGeometryOperator(){
+  PolygonMeshSphereGenerator geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+object PolygonMeshSphereGenerator : BaseGenerator {
+  Scalar radius;
+  UInt32 detail;
+  Boolean uvs;
+  Boolean normals;
+};
+
+function PolygonMeshSphereGenerator(){
+  this.radius = 3.0;
+  this.detail = 4;
+  this.uvs = true;
+  this.normals = true;
+}
+
+function PolygonMeshSphereGenerator(Scalar radius, UInt32 detail, Boolean setNormals, Boolean setUVs){
+  this.radius = radius;
+  this.detail = detail;
+  this.uvs = setNormals;
+  this.normals = setUVs;
+}
+
+function UInt32[String] PolygonMeshSphereGenerator.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_Write;
+  if(this.normals)
+    result['normals'] = AttrMode_Write;
+  if(this.uvs)
+    result['uvs0'] = AttrMode_Write;
+  return result;
+}
+
+
+function PolygonMeshSphereGenerator.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+
+  PolygonMesh mesh();
+  mesh.debugName = "Sphere";
+  mesh.addSphere(Xfo(), this.radius, this.detail, this.normals, this.uvs);
+  geomSet.resize(1);
+  geomSet.set(0, mesh);
+}
+
+

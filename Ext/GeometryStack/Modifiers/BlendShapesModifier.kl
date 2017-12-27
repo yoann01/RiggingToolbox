@@ -1,0 +1,618 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+
+//////////////////////////////////////
+// Factory definition.
+
+object BlendShapesModifierFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator BlendShapesModifierFactory.constructGeometryOperator(){
+  BlendShapesModifier geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+
+struct BlendShapesModifier_Target {
+  UInt32 indices[];
+  Vec3 deltas[];
+};
+
+function UInt32 BlendShapesModifier_Target.size(){
+  return this.indices.size();
+}
+
+function BlendShapesModifier_Target.resize!(UInt32 size){
+  this.indices.resize(size);
+  this.deltas.resize(size);
+}
+
+//////////////////////////////////////
+//
+
+
+/// The Blend Shapes modifier stores a sparse data set of offsets. 
+object BlendShapesModifier : BaseModifier {
+  String filePath;
+  String referenceGeometryName;
+  String targetGeometryNames[];
+
+  Vec3 referencePositions[][];
+  BlendShapesModifier_Target targets[][];
+  Scalar threshold;
+
+  Scalar weights[];
+  Scalar sparcity;
+  UInt32 targetCount;
+  Scalar shapeThreshold;
+
+  Boolean displayDebugging;
+  UInt32 dataVersion;
+  DrawingHandle handle;
+  InlineInstance instances[];
+  Color targetColors[];
+};
+
+
+function BlendShapesModifier(){
+  this.threshold = 0.001;
+  this.sparcity = 0.0;
+  this.targetCount = 0.0;
+  this.shapeThreshold = 0.001;
+}
+
+
+function UInt32[String] BlendShapesModifier.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_ReadWrite;
+  return result;
+}
+
+//////////////////////////////////////
+//
+
+
+inline String BlendShapesModifier_getNameFromPath(String pathStr) {
+  String path[] = pathStr.split('/');
+  return path[path.size()-1];
+}
+
+/// Loads the targets from the alembic file
+/// \internal
+function BlendShapesModifier.loadTargetsFromAlembic!(FilePath expandedPath){
+  report("loadTargetsFromAlembic:" + expandedPath.string());
+  AutoProfilingEvent p(FUNC);
+  AlembicArchiveReader archive(expandedPath.string());
+  String polymeshPaths[] = archive.getPathsOfType('PolyMesh');
+
+  AlembicPolyMeshReader readers[];
+  readers.resize(polymeshPaths.size());
+  String refGeomNames[];
+
+  for(UInt32 i=0; i<polymeshPaths.size(); i++) {
+    String name = BlendShapesModifier_getNameFromPath(polymeshPaths[i]);
+    if(applyNameFilter(name, this.referenceGeometryName)){
+      AlembicPolyMeshReader reader = archive.getPolyMesh(polymeshPaths[i]);
+      PolygonMesh mesh = PolygonMesh();
+      reader.readSample(0.0, mesh);
+      this.addReferenceGeometry(mesh);
+
+      refGeomNames.push(name);
+    }
+  }
+
+  if(this.targets.size() == 0){
+    // Generate a helpfull message because its unlikely that users want no geometries from a file.
+    report("Warning: No reference geometries found in file that match the name filters specified:" + this.referenceGeometryName);
+    for(Size i=0; i<polymeshPaths.size(); i++) {
+      String name = BlendShapesModifier_getNameFromPath(polymeshPaths[i]);
+      report("Name:" + name + " path:" + polymeshPaths[i]);
+    }
+    return;
+  }
+
+  for(UInt32 i=0; i<polymeshPaths.size(); i++) {
+    String name = BlendShapesModifier_getNameFromPath(polymeshPaths[i]);
+
+    if(applyNameFilters(name, this.targetGeometryNames)){
+      AlembicPolyMeshReader reader = archive.getPolyMesh(polymeshPaths[i]);
+      PolygonMesh mesh = PolygonMesh();
+      reader.readSample(0.0, mesh);
+
+      if(refGeomNames.size() == 1)
+        this.addTargetGeometry(0, mesh);
+      else{
+        for(UInt32 j=0; j<refGeomNames.size(); j++) {
+          if(name.startsWith(refGeomNames[j])){
+            this.addTargetGeometry(j, mesh);
+            break;
+          }
+        }
+      }
+    }
+  }
+  UInt32 targetCount;
+  for(UInt32 i=0; i<this.targets.size(); i++){
+    if(i==0)
+      targetCount = this.targets[i].size();
+    if(this.targets[i].size() == 0){
+      // Generate a helpfull message because its unlikely that users want no geometries from a file.
+      report("Warning: No target geometries found in file that match the name filters specified:" + this.targetGeometryNames);
+      for(Size j=0; j<polymeshPaths.size(); j++) {
+        String name = BlendShapesModifier_getNameFromPath(polymeshPaths[j]);
+        report("Name:" + name + " path:" + polymeshPaths[j]);
+      }
+      return;
+    }
+    else if(targetCount != this.targets[i].size()){
+      report("Warning multiple blend shape goemetires in reference mesh, but matching number of targets not found:"+this.targets[i].size());
+    }
+  }
+
+
+  // The reference positions are only used to generate the sparse blend targets. 
+  // We can safely remove them now to reduce memory usage. 
+  this.referencePositions.resize(0);
+
+  // Compute the total sparcity of all the blend targets.
+  // This value helps us understand how much space is saved by storing only sparce blend shapes.
+  this.sparcity /= this.targetCount;
+  report("sparcity:" + this.sparcity);
+}
+
+//////////////////////////////////////
+//
+
+/// \internal
+struct BlendShapesModifier_collectGeomPointsSharedData {
+  Vec3 positions[];
+  Vec3 refpositions[];
+  Scalar threshold;
+};
+
+/// \internal
+struct BlendShapesModifier_collectMeshPointsSharedData {
+  PolygonMesh mesh;
+  Vec3 refpositions[];
+  Scalar threshold;
+};
+
+/// \internal
+struct BlendShapesModifier_CollectPointsMapOutput {
+  Boolean collected;
+  Integer index;
+  Vec3 delta;
+};
+
+
+/// \internal
+operator blendShapesModifier_collectGeomPointsProduce(
+  io BlendShapesModifier_CollectPointsMapOutput result,
+  Index index,
+  UInt32 count,
+  BlendShapesModifier_collectGeomPointsSharedData sharedData
+) {
+  Vec3 pos = sharedData.positions[index];
+  Vec3 delta = pos - sharedData.refpositions[index];
+  if(delta.length() > sharedData.threshold){
+    result.collected = true;
+    result.index = index;
+    result.delta = delta;
+  }
+}
+
+/// An operator for collecting points during surface painting.
+/// \internal
+operator blendShapesModifier_collectMeshPointsProduce(
+  io BlendShapesModifier_CollectPointsMapOutput result,
+  Index index,
+  UInt32 count,
+  BlendShapesModifier_collectMeshPointsSharedData sharedData
+) {
+  Vec3 pos = sharedData.mesh.getPointPosition(index);
+  Vec3 delta = pos - sharedData.refpositions[index];
+  if(delta.length() > sharedData.threshold){
+    result.collected = true;
+    result.index = index;
+    result.delta = delta;
+  }
+  else{
+    result.collected = false;
+  }
+}
+
+
+/// An operator for collecting points during surface painting.
+/// \internal
+operator blendShapesModifier_collectPointsReduce(
+  BlendShapesModifier_CollectPointsMapOutput input,
+  io BlendShapesModifier_Target output,
+  Index index,
+  UInt32 count
+) {
+  if(input.collected){
+    output.indices.push(input.index);
+    output.deltas.push(input.delta);
+  }
+}
+
+// First add a reference geometry, followed by a collection of targets.
+// As the targets are added we generate our sparse blend targets based on the reference.
+// This step must happen before evaluation.
+function BlendShapesModifier.addReferenceGeometry!(Geometry refGeometry){
+  report("addReferenceGeometry:");
+  AutoProfilingEvent p(FUNC);
+
+  UInt32 numGeoms = this.targets.size()+1;
+  UInt32 geomIndex = numGeoms-1;
+  this.targets.resize(numGeoms);
+  this.referencePositions.resize(numGeoms);
+
+  Ref<GeometryAttributes> attributes = refGeometry.getAttributes();
+  Vec3Attribute positionsAttribute = attributes.positionsAttribute;
+  this.referencePositions[geomIndex] = positionsAttribute.values;
+}
+
+function BlendShapesModifier.addTargetGeometry!(UInt32 geomIndex, Geometry targetGeometry){
+  AutoProfilingEvent p(FUNC);
+
+  UInt32 numTargets = this.targets[geomIndex].size()+1;
+  UInt32 targetIndex = numTargets-1;
+  this.targets[geomIndex].resize(numTargets);
+  this.weights.resize(numTargets);
+
+  PolygonMesh targetMesh = targetGeometry;
+  UInt32 referencePointCount;
+  if(!targetMesh){
+
+    Ref<GeometryAttributes> attributes = targetGeometry.getAttributes();
+    Vec3Attribute positionsAttribute = attributes.positionsAttribute;
+
+    BlendShapesModifier_collectGeomPointsSharedData sharedData;
+    sharedData.positions = positionsAttribute.values;
+    sharedData.refpositions = this.referencePositions[geomIndex];
+    sharedData.threshold = this.threshold;
+
+    ValueProducer<BlendShapesModifier_Target> reducer = createReduce( 
+      createArrayGenerator(
+        createConstValue( attributes.size() ),
+        blendShapesModifier_collectGeomPointsProduce,
+        createConstValue( sharedData )
+      ),
+      blendShapesModifier_collectPointsReduce
+    );
+    this.targets[geomIndex][targetIndex] = reducer.produce();
+
+    referencePointCount = attributes.size();
+  }
+  else{
+    BlendShapesModifier_collectMeshPointsSharedData sharedData;
+    sharedData.mesh = targetMesh;
+    sharedData.refpositions = this.referencePositions[geomIndex];
+    sharedData.threshold = this.threshold;
+
+    ValueProducer<BlendShapesModifier_Target> reducer = createReduce( 
+      createArrayGenerator(
+        createConstValue( targetMesh.pointCount() ),
+        blendShapesModifier_collectMeshPointsProduce,
+        createConstValue( sharedData )
+      ),
+      blendShapesModifier_collectPointsReduce
+    );
+    this.targets[geomIndex][targetIndex] = reducer.produce();
+
+    referencePointCount = targetMesh.pointCount();
+  }
+  UInt32 targetPointCount = this.targets[geomIndex][targetIndex].indices.size();
+  report("addTargetGeometry:" + geomIndex +":" + this.targets[geomIndex].size() + ":" + Scalar(targetPointCount)/Scalar(referencePointCount));
+  this.sparcity += Scalar(targetPointCount)/Scalar(referencePointCount);
+  this.targetCount ++;
+}
+
+
+
+function BlendShapesModifier.setBlendWeights!(Scalar weights[]){
+  this.weights = weights;
+  String data;
+  this.notify('changed', data);
+}
+
+
+function BlendShapesModifier.setDisplayDebugging!(Boolean displayDebugging){
+  if(this.displayDebugging != displayDebugging){
+    this.displayDebugging = displayDebugging;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+//////////////////////////////////////
+//
+
+operator blendShapesModifier_applyGeomDeltas<<<index>>>(
+  io Vec3 positions[],
+  BlendShapesModifier_Target target,
+  Scalar weight,
+  Boolean displayDebugging,
+  io Color vertexColors[],
+  Color targetColor
+){
+  UInt32 targetOffsetIndex = target.indices[index];
+  positions[targetOffsetIndex] += target.deltas[index] * weight;
+  if(displayDebugging){
+    vertexColors[targetOffsetIndex] += targetColor * weight;
+  }
+}
+
+operator blendShapesModifier_applyMeshDeltas<<<index>>>(
+  io PolygonMesh mesh,
+  BlendShapesModifier_Target target,
+  Scalar weight,
+  Boolean displayDebugging,
+  io Ref<ColorAttribute> vertexColorsAttr,
+  Color targetColor
+){
+  UInt32 targetOffsetIndex = target.indices[index];
+  Vec3 pos = mesh.getPointPosition(targetOffsetIndex);
+  mesh.setPointPosition(targetOffsetIndex, pos + (target.deltas[index] * weight));
+  if(displayDebugging){
+    Color color = vertexColorsAttr.values[targetOffsetIndex];
+    mesh.setPointAttribute(targetOffsetIndex, vertexColorsAttr, color + (targetColor * weight));
+  }
+}
+
+
+operator blendShapesModifier_deformGeometries<<<index>>>(
+  io GeometrySet geomSet,
+  BlendShapesModifier_Target targets[][],
+  Scalar weights[],
+  Scalar shapeThreshold,
+  Boolean displayDebugging,
+  Color targetColors[],
+  io UInt32 numActiveShapes
+){
+  AutoProfilingEvent p(FUNC);
+  if(targets[index].size() != weights.size()){
+    report("BlendShapesModifier cannot evaluate because the number of weights:" + weights.size() + " does not match the number of targets:" + targets[index].size());
+    return;
+  }
+  Geometry geom = geomSet.get(index);
+  Ref<GeometryAttributes> attributes = geom.getAttributes();
+  Vec3Attribute positionsAttribute = attributes.positionsAttribute;
+  
+  PolygonMesh mesh = geom;
+  Ref<ColorAttribute> vertexColorsAttr = null;
+  if(displayDebugging){
+    vertexColorsAttr = mesh.getOrCreateAttribute("blendShapes_vertexColors", ColorAttribute);
+    vertexColorsAttr.incrementVersion();
+    // Re-initilialize the vertex colors each evaluation because the colors are accumulated into this buffer.
+    Color newColors[];
+    newColors.resize(vertexColorsAttr.size());
+    vertexColorsAttr.values = newColors;
+  }
+
+  for(UInt32 i=0; i<targets[index].size(); i++){
+    if(weights[i] > shapeThreshold){
+      //AutoProfilingEvent p_targ("Target:" + i);
+      if(!mesh){
+        blendShapesModifier_applyGeomDeltas<<<targets[index][i].size()>>>(
+          positionsAttribute.values,
+          targets[index][i],
+          weights[i],
+          displayDebugging,
+          vertexColorsAttr.values,
+          targetColors[i]
+        );
+      }
+      else{
+        blendShapesModifier_applyMeshDeltas<<<targets[index][i].size()>>>(
+          mesh,
+          targets[index][i],
+          weights[i],
+          displayDebugging,
+          vertexColorsAttr,
+          targetColors[i]
+        );
+      }
+      if(displayDebugging){
+        // Atomic increment means that we don't have to lock to modify this shared value.
+        numActiveShapes.atomicInc();
+      }
+    }
+  }
+  positionsAttribute.incrementVersion();
+}
+
+function BlendShapesModifier.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+  if(this.targets.size() != geomSet.size()){
+    setError("BlendShapesModifier cannot evaluate because the number of geoms:" + geomSet.size() + " does not match the number of targets:" + this.targets.size());
+    return;
+  }
+
+  if(this.displayDebugging){
+    if(!this.handle || this.dataVersion != geomSet.getVersion()){
+      this.setupRendering(geomSet);
+      this.dataVersion = geomSet.getVersion();
+    }
+  }
+  else{
+    this.handle = null;
+  }
+
+  UInt32 numActiveShapes = 0;
+  blendShapesModifier_deformGeometries<<<geomSet.size()>>>(
+      geomSet,
+      this.targets,
+      this.weights,
+      this.shapeThreshold,
+      this.displayDebugging,
+      this.targetColors,
+      numActiveShapes
+    );
+
+  if(this.displayDebugging){
+    // Logging the number of active shape targets helps understand the peformance.
+    report("numActiveShapes:" + numActiveShapes);
+  }
+}
+
+
+function BlendShapesModifier.setupRendering!(io GeometrySet geomSet){
+
+  // Construct a handle for this character instance. 
+  // The handle will clean up the InlineDrawing when it is destroyed. 
+  this.handle = DrawingHandle("BlendShapesModifier");
+
+  // Now setup the rendering
+  InlineShader shader = this.handle.getDrawing().registerShader(OGLVertexColorOverlayShader2('BlendShapesModifierShader', 'blendShapes_vertexColors'));
+  InlineMaterial material = shader.getOrCreateMaterial("BlendShapesModifierMaterial");
+  for(Integer geomId=0; geomId<geomSet.size(); geomId++){
+    PolygonMesh mesh = geomSet.get(geomId);
+    if(mesh){
+      String name = "BlendShapesModifier_" + String(geomId);
+      InlineShape shape = InlineMeshShape(name, mesh);
+
+      // ThreadsafeMetaDataContainer metaData = getGeomMetaData(mesh);
+      // Mat44Param bindShapeTransform = metaData.get('globalTransform');
+      // StaticInlineTransform transform(name + "_Transform", this.handle.rootTransform, Xfo(bindShapeTransform.value));
+      InlineInstance instance = SimpleInlineInstance(name + "_Instance", this.handle.rootTransform, shape, material);
+    }
+  }
+}
+
+
+
+function JSONDictValue BlendShapesModifier.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json = this.parent.saveJSON(persistenceContext);
+  json.setString('filePath', this.filePath);
+  json.setString('referenceGeometryName', this.referenceGeometryName);
+  json.setBoolean('displayDebugging', this.displayDebugging);
+
+  JSONArrayValue targetGeometryNamesData();
+  for(Integer i=0; i<this.targetGeometryNames.size(); i++)
+    targetGeometryNamesData.addString(this.targetGeometryNames[i]);
+  json.set('targetGeometryNames', targetGeometryNamesData);
+
+  return json;
+}
+
+function BlendShapesModifier.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  this.parent.loadJSON(persistenceContext, json);
+
+  if(json.has('threshold'))
+    this.threshold = json.getScalar('threshold');
+
+  if(json.has('shapeThreshold'))
+    this.shapeThreshold = json.getScalar('shapeThreshold');
+
+  if(json.has('displayDebugging'))
+    this.displayDebugging = json.getBoolean('displayDebugging');
+
+  if(json.has('filePath')){
+    this.filePath = json.getString('filePath');
+
+    // Check for an absolute file path, then a relative path.
+    FilePath expandedPath = FilePath(this.filePath).expandEnvVars();
+
+    if(expandedPath.isRelative()){
+      expandedPath = FilePath(persistenceContext.filePath) / expandedPath;
+    }
+    if(!expandedPath.exists()){
+      report("File not found:" + expandedPath.string());
+      return;
+    }
+
+    // Now check if a bincache file already exists that we can load 
+    // instead of the alembic file.
+    FilePath binCachefile(expandedPath.string());
+    binCachefile.replaceExtension('blendShapes');
+    if(binCachefile.exists()){
+      this.loadTargetsFromBinCache(binCachefile);
+    }
+    else{
+      // The Alembic file should contain a collection of geometries that are grouped by naming convention.
+      // referenceGeometryName:'MyGeometry' <- The reference geometry used to compute the blend shapes. 
+      // targetGeometryNames: [ 'MyGeometry_Shape1', 'MyGeometry_Shape2', 'MyGeometry_Shape3'] <- Shape targets
+
+      this.referenceGeometryName = json.getString('referenceGeometryName');
+
+      JSONArrayValue targetGeometryNamesData = json.get('targetGeometryNames');
+      if(targetGeometryNamesData)
+        this.targetGeometryNames = targetGeometryNamesData.toStringArray();
+      
+      this.loadTargetsFromAlembic(expandedPath);
+
+      this.saveTargetsToBinCache(binCachefile);
+    }
+
+
+    if(this.targets.size() > 0){
+      this.targetColors.resize(this.targets[0].size());
+      for (Integer i = 0; i < this.targets[0].size(); i++){
+        this.targetColors[i] = randomColor(6754, i, 0.25);
+      }
+    }
+  }
+}
+
+function BlendShapesModifier.saveTargetsToBinCache(FilePath binCachefile) {
+  report("saveTargetsToBinCache:" + binCachefile.string());
+  BinaryBlockWriter blockWriter(binCachefile.string());
+  blockWriter.setNumBlocks(this.targets.size());
+
+  for(UInt32 i=0; i<this.targets.size(); i++){
+    BinaryBlockWriter targetSetWriter = blockWriter.beginWriteBlock('targetSet'+i, this.targets[i].size());
+    for(UInt32 j=0; j<this.targets[i].size(); j++){
+      BinaryBlockWriter targetWriter = targetSetWriter.beginWriteBlock('target'+j);
+      UInt32 count = this.targets[i][j].size();
+      targetWriter.write(count.data(), count.dataSize());
+      targetWriter.write(this.targets[i][j].indices.data(), this.targets[i][j].indices.dataSize());
+      targetWriter.write(this.targets[i][j].deltas.data(), this.targets[i][j].deltas.dataSize());
+    }
+  }
+}
+
+function BlendShapesModifier.loadTargetsFromBinCache!(FilePath binCachefile) {
+  report("loadTargetsFromBinCache:" + binCachefile.string());
+  BinaryBlockReader blockReader(binCachefile.string());
+  UInt64 numBlocks = blockReader.getNumBlocks();
+  this.targets.resize(UInt32(numBlocks));
+  for(UInt32 i=0; i<this.targets.size(); i++){
+    BinaryBlockReader targetSetReader = blockReader.beginReadBlock('targetSet'+i);
+    UInt64 numTargets = targetSetReader.getNumBlocks();
+    this.targets[i].resize(UInt32(numTargets));
+    for(UInt32 j=0; j<this.targets[i].size(); j++){
+      BinaryBlockReader targetReader = targetSetReader.beginReadBlock('target'+j);
+      UInt32 count = 0;
+      targetReader.read(count.data(), count.dataSize());
+      this.targets[i][j].resize(count);
+      targetReader.read(this.targets[i][j].indices.data(), this.targets[i][j].indices.dataSize());
+      targetReader.read(this.targets[i][j].deltas.data(), this.targets[i][j].deltas.dataSize());
+    }
+  }
+}
+
+/// Generates a Description string of this modifier.
+/// \param indent The indentation to use when generating the string. 
+function String BlendShapesModifier.getDesc(String indent) {
+  String desc;
+  desc += indent + "{\n";
+  desc += indent + "  type: "+ this.type() + ",\n";
+  desc += indent + "  filePath: "+ this.filePath + "\n";
+  desc += indent + "  refGeoms: "+ this.targets.size() + "\n";
+  for(Integer i=0; i<this.targets.size(); i++)
+    desc += indent + "    blendTargets: "+ + i +":" + this.targets[i].size() + "\n";
+  desc += indent + "}";
+  return desc;
+}
+

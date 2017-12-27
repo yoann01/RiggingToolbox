@@ -1,0 +1,376 @@
+/*
+ *  Copyright 2010-2013 Fabric Engine Inc. All rights reserved.
+ */
+
+/**
+\versionadded 1.13.0
+
+The :kl-ref:`Weightmap2` encapsulates a paintable attribute applied to a polygon 
+mesh. Weightmaps can be used in conjunction with custom deformers to provide a 
+paintable interface to per-vertex weight values. 
+
+The Weightmap2 is a helper object to facilitate the binding of weightmaps to geometry in a DCC and manage saving/loading of the weightmap data.
+
+
+\rst
+
+  Example
+  --------
+  Create a deformer in Splice, add a Weightmap2 port, and then in the KL operator connect the weightmap to the
+  polygon mesh.
+  .. kl-example:: Weightmap2
+
+    require Math;
+    require PolygonMesh;
+    require Manipulation;
+
+    operator weightMap(io PolygonMesh mesh0, in Mat44 mesh0Transform, io Weightmap2 weightMap) {
+
+      if(!weightMap.isConnected()){
+        weightMap.setName('BulgeWeight');
+        weightMap.connect(mesh0, Xfo(mesh0Transform));
+      }
+    }
+
+  From Python, you can then activate the weight map painter by using the Python interface to the Core. 
+
+  .. python-example:: EventDispatcherHandle
+      :nooutput:
+
+    from maya import cmds
+    import FabricEngine.Core
+    
+    #create a client - will be ignored if it already exists
+    cmds.fabricSplice('constructClient')
+
+    # get the client id from splice
+    contextID = cmds.fabricSplice('getClientContextID')
+    
+    # Get acces to the core context via the Splice contextID
+    client = FabricEngine.Core.createClient({'contextID':contextID})
+
+    # you could now use this mesh within a splice node 
+    infos = cmds.fabricSplice('getPortInfo', spliceNode, '{"portName":"mesh"}') 
+    infos = json.loads(infos)
+    for info in infos:
+      if info['name'] == 'mesh':
+          break
+    dgNodeName = info['graph'] + '_' + info['node'] 
+    member = info['member'] 
+    dgNode = client.DG.getNodeByName(dgNodeName)
+
+    # Get the weightmap RTVal from the dgNode.
+    weightmap = dgNode.getValue('Weightmap2', 0)
+
+    # Display the weightmap in the viewport
+    weightmap.display('');
+
+    # Activate the manipulator setup for this weightmap.
+    weightmap.activateManipulator('');
+
+\endrst
+
+*/
+
+require InlineDrawing;
+require FileIO;
+require JSON;
+
+object Weightmap2 : Persistable, Detachable {
+  /// The name of the weightmap, which is used as the name of the geometry attribute on the polygon mesh.
+  String name;
+
+  /// The color of the weightmap, used when displaying the weightmap in the viewport.
+  Color color;
+
+  /// the meshes that the weightmap is connected to.
+  PolygonMesh meshes[];
+
+  /// the transform of the mesh that the weightmap is connected to.
+  Xfo meshTransforms[];
+
+  /// The Scalar attribute that is applied ot the connected mesh.
+  ScalarAttribute weightMapAttrs[];
+
+  /// toggle indicating that the weightmap data has already been loaded.
+  /// \internal
+  Boolean loaded;
+
+  /// the Drawing handle managing the rendering of the weightmap.
+  /// \internal
+  DrawingHandle handle;
+
+  /// \internal
+  InlineInstance instances[];
+  /// \internal
+  InlineMaterial overlayMaterial;
+
+  /// The Manipulator used to interactively modify the weightmap.
+  SurfaceAttributePaintManipulator paintManipulator;
+
+  Boolean saveToExternalFile;
+};
+
+function Weightmap2(){
+  this.name = 'weightMap';
+  this.color = Color(1.0, 0.0, 0.0);
+  this.paintManipulator = SurfaceAttributePaintManipulator();
+}
+
+/// Sets the name of the weightmap, which is used as the name of the geometry attribute on the polygon mesh.
+/// \param the name of the weightmap.
+function Weightmap2.setName!(String name){
+  this.name = name;
+}
+/// Returns the name of the weightmap, which is used as the name of the geometry attribute on the polygon mesh.
+function String Weightmap2.getName(){
+  return this.name;
+}
+
+/// Sets the color of the weightmap, used when displaying the weightmap in the viewport.
+/// \param the color of the weightmap.
+function Weightmap2.setColor!(Color color){
+  this.color = color;
+}
+
+
+function JSONDictValue Weightmap2.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue root();
+  root.setString("name", this.name);
+
+  if(this.saveToExternalFile){
+    FilePath sceneFilePath(persistenceContext.filePath);
+    // Generate a file name for the binary weights data file based on the name of the scene file.
+    String fileName = sceneFilePath.fileName().string().split('.')[0] + '_' + this.name + 'BinCache.bin';
+    // The binary file will live in the same folder as the dcc scene file. 
+    FilePath binCacheFilePath = sceneFilePath.removeFileName() / FilePath(fileName);
+    BinaryBlockWriter blockWriter(binCacheFilePath.string());
+    blockWriter.setNumBlocks(1+this.weightMapAttrs.size());
+    BinaryBlockWriter headerWriter = blockWriter.beginWriteBlock('header');
+    UInt32 numWeightmaps = this.weightMapAttrs.size();
+    headerWriter.write(numWeightmaps.data(), numWeightmaps.dataSize());
+
+    for(Integer i=0; i<this.weightMapAttrs.size(); i++){
+      BinaryBlockWriter bodyWriter = blockWriter.beginWriteBlock('weightMap'+i);
+      UInt32 numElements = this.weightMapAttrs[i].size();
+      bodyWriter.write(numElements.data(), numElements.dataSize());
+      Scalar data[] = this.weightMapAttrs[i].values;
+      bodyWriter.write(data.data(), data.dataSize());
+    }
+    root.setString("fileName", fileName);
+  }
+  else{
+    // Save all the data directly into the JSON string.
+    JSONArrayValue weightMapsData();
+    for(Integer i=0; i<this.weightMapAttrs.size(); i++){
+      JSONArrayValue weightMapData();
+      weightMapData.values.resize(this.weightMapAttrs[i].size());
+      for(Integer j=0; j<this.weightMapAttrs.size(); j++)
+        weightMapData.values[j] = JSONNumberValue(this.weightMapAttrs[i].values[j]);
+      weightMapsData.add(weightMapData);
+    }
+    root.set("weightMapsData", weightMapsData);
+  }
+  return root;
+}
+
+function Weightmap2.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+
+  if(json.has("name")){
+    this.name = json.getString("name");
+  }
+  if(json.has("fileName")){
+    FilePath sceneFilePath(persistenceContext.filePath);
+    FilePath binCacheFilePath = sceneFilePath.removeFileName() / FilePath(json.getString("fileName"));
+    if(binCacheFilePath.exists()){
+      BinaryBlockReader blockReader(binCacheFilePath.string());
+      // Now read the data back in in an arbitrary order. 
+      BinaryBlockReader headerReader = blockReader.beginReadBlock('header');
+      UInt32 numWeightmaps = 0;
+      headerReader.read(numWeightmaps.data(), numWeightmaps.dataSize());
+      this.weightMapAttrs.resize(numWeightmaps);
+
+      for(Integer i=0; i<numWeightmaps; i++){
+        BinaryBlockReader bodyReader = blockReader.beginReadBlock('weightMap'+i);
+        if(bodyReader){
+          UInt32 numElements = 0;
+          bodyReader.read(numElements.data(), numElements.dataSize());
+          this.weightMapAttrs[i] = ScalarAttribute();
+          this.weightMapAttrs[i].name = this.name;
+          this.weightMapAttrs[i].resize(numElements);
+          bodyReader.read(this.weightMapAttrs[i].values.data(), this.weightMapAttrs[i].values.dataSize());
+        }
+      }
+      this.loaded = true;
+    }
+    else{
+      report("ERROR Loading weightmap. Weights file not found:" + binCacheFilePath.string());
+    }
+  }
+  else{
+    if(json.has("weightMapsData")){
+      JSONArrayValue weightMapsData = json.get("weightMapsData");
+      this.weightMapAttrs.resize(weightMapsData.size());
+      for(Integer i=0; i<weightMapsData.size(); i++){
+        JSONArrayValue weightMapData = weightMapsData.get(i);
+        this.weightMapAttrs[i] = ScalarAttribute();
+        this.weightMapAttrs[i].name = this.name;
+        this.weightMapAttrs[i].resize(weightMapData.size());
+        for(Integer j=0; j<this.weightMapAttrs.size(); j++)
+          this.weightMapAttrs[i].values[j] = weightMapData.getScalar(j);
+      }
+    }
+  }
+}
+
+/// Save the weightmap to a string. 
+/// \note The Weightmap2 writes out a binary file to disk in the same location as the DCC scene file with a suffix  '_WeightmapNameBinCache.bin'
+function String Weightmap2.saveDataToString(PersistenceContext persistenceContext){
+  JSONDoc doc();
+  doc.root = this.saveJSON(persistenceContext);
+  String json = doc.write();
+  return json;
+}
+
+
+/// Load the weightmap data back from a string. 
+/// \note the Weightmap2 looks within the file system where the DCC file is being loaded from for the Weightmap2 binary file. This file should have the same name as the DCC file, but with the suffix '_WeightmapNameBinCache.bin'
+function Weightmap2.loadDataFromString!(PersistenceContext persistenceContext, String data){
+  JSONDoc doc();
+  if(doc.parse(data)){
+    this.loadJSON(persistenceContext, doc.root);
+  }
+  else{
+    setError("ERROR Loading weightmap. Saved JSON data is not valid");
+  }
+}
+
+/// Returns true if the weightmap has already been connected to a polygon mesh.
+function Boolean Weightmap2.isConnected(){
+  return this.meshes.size() > 0;
+}
+
+/// Connects the weightmap to a polygon mesh. 
+/// When a weightmap is connected to a polygon mesh, it sets up the geometry attribute
+/// in preparation for painting. 
+/// \param mesh the mesh to connect the weightmap to. 
+/// \param meshTransform The transform of the mesh. This is required to be able to dispaly the weightmap correctly.
+/// \param index The index of the mesh in the weightmap. 
+function Weightmap2.connect!( PolygonMesh mesh, Xfo meshTransform, UInt32 index){
+  report(this.name + ".connect:"+index);
+  if(this.weightMapAttrs.size() <= index){
+    UInt32 newNumMeshes = index + 1;
+    this.meshes.resize(newNumMeshes);
+    this.meshTransforms.resize(newNumMeshes);
+    this.weightMapAttrs.resize(newNumMeshes);
+  }
+
+  this.meshes[index] = mesh;
+  this.meshTransforms[index] = meshTransform;
+
+  // this.mesh.recomputePointNormals();
+  // Add the weightmap to the mesh.
+  if(this.weightMapAttrs[index] != null){
+    // When loading from disk, the attribute was generated in the load function,
+    // and now we need to attach it to the mesh.(unless it already has)
+    if(!this.meshes[index].getAttributes().hasAttribute(this.weightMapAttrs[index]))
+      this.meshes[index].attachNewAttribute(this.weightMapAttrs[index]);
+  }
+  else{
+    this.weightMapAttrs[index] = this.meshes[index].getOrCreateAttribute(this.name, ScalarAttribute);
+  }
+}
+
+/// Connects the weightmap to a polygon mesh. 
+/// When a weightmap is connected to a polygon mesh, it sets up the geometry attribute
+/// in preparation for painting. 
+/// \param mesh the mesh to connect the weightmap to. 
+/// \param meshTransform The transform of the mesh. This is required to be able to dispaly the weightmap correctly.
+function Weightmap2.connect!( PolygonMesh mesh, Xfo meshTransform){
+  this.connect(mesh, meshTransform, 0);
+}
+
+/// Displays the weightmap in the viewport using an overlay shader to render the painted region.
+/// \param state PAss True or False to enable/disable display of the weightmap.
+function Weightmap2.display!(Boolean state){
+  if(state){
+    if(!this.handle){
+      InlineDrawing drawing = OGLInlineDrawing_GetInstance();
+      this.handle = DrawingHandle();
+      InlineShader overlayShader = drawing.registerShader(OGLSurfaceOverlayShader(this.name+'Shader', this.name));
+      this.overlayMaterial = overlayShader.getOrCreateMaterial("weightMap");
+      this.overlayMaterial.setUniform('u_color', this.color);
+
+      this.instances.resize(this.meshes.size());
+      for(Integer i=0; i<this.instances.size(); i++){
+        // create a shape for the mesh
+        InlineMeshShape shape = InlineMeshShape(this.name+'Shape', this.meshes[i]);
+        InlineTransform transform = StaticInlineTransform(this.name+'Transform', this.handle.getRootTransform(), this.meshTransforms[i]);
+
+        this.instances[i] = InlineInstance(this.name+'Instance', transform, shape);
+        this.instances[i].addMaterial(this.overlayMaterial);
+      }
+    }
+    else {
+      for(Integer i=0; i<this.instances.size(); i++){
+        if(this.instances[i] != null && !this.instances[i].hasMaterial(this.overlayMaterial)){
+          this.instances[i].addMaterial(this.overlayMaterial); 
+        }
+      }
+      this.overlayMaterial.setUniform('u_color', this.color);
+    }
+  }
+  else {
+    for(Integer i=0; i<this.instances.size(); i++){
+      if(this.instances[i] != null && this.instances[i].hasMaterial(this.overlayMaterial)){
+        this.instances[i].removeMaterial(this.overlayMaterial); 
+      }
+    }
+  }
+}
+
+/// Activate the Weightmap2 manipulator 
+function Weightmap2.activateManipulator!(){
+  if(this.instances.size() == 0)
+    this.display(true);
+  if(this.instances.size() == 0){
+    setError("Cannnot activate the Weightmap2 without a geometry assigned");
+  }
+  Ref<EventDispatcher> eventDispatcher = EventDispatcher_GetInstance();
+  if(!eventDispatcher.hasManipulator(this.name+'PaintManipulator')){
+    eventDispatcher.registerManipulator(this.name+'PaintManipulator', this.paintManipulator);
+  }
+  for(Integer i=0; i<this.instances.size(); i++){
+    if(!this.paintManipulator.hasTargetGeometry(this.instances[i]))
+      this.paintManipulator.addTargetGeometry(this.instances[i]);
+  }
+  if(eventDispatcher.activeManipulator() != this.name+'PaintManipulator'){
+    // activate the manipulator
+    this.paintManipulator.attributeName = this.name;
+    eventDispatcher.pushManipulator(this.name+'PaintManipulator');
+  }
+}
+
+/// Deactivate the Weightmap2 manipulator 
+function Weightmap2.deactivateManipulator!(){
+  if(this.instances.size() == 0)
+    return;
+  Ref<EventDispatcher> eventDispatcher = EventDispatcher_GetInstance();
+  if(this.paintManipulator != null && eventDispatcher.activeManipulator() == this.name+'PaintManipulator'){
+    eventDispatcher.popManipulator();
+  }
+}
+
+/// called by the Splice when the owning splice container is deleted and moved onto the undo stack.
+function Weightmap2.detach!(){
+  this.handle.detach();
+  this.deactivateManipulator();
+  Ref<EventDispatcher> eventDispatcher = EventDispatcher_GetInstance();
+  eventDispatcher.unregisterManipulator(this.name+'PaintManipulator');
+  this.paintManipulator = null;
+}
+
+/// Called by the Splice when the owning splice container is restored from then undo stack.
+function Weightmap2.attach!(){
+  this.handle.attach();
+}

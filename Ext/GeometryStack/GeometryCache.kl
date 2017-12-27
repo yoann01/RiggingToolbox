@@ -1,0 +1,34 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+require FabricStatistics;
+
+
+object GeometryCache : CachePoint {
+  // Temp: Used in debugging and unit testing.
+  Boolean disabled;
+  Boolean valid;
+  Geometry cachedGeometries[];
+  UInt32 topologyVersions[];
+};
+
+function GeometryCache() {
+}
+
+function GeometryCache.update!(io GeometrySet geomSet, GeometryOperator op) {
+  if(this.disabled)
+    return;
+  AutoProfilingEvent p(FUNC);
+  geomSet.resize(0);
+  this.valid = true;
+}
+
+function GeometryCache.free!(){
+  AutoProfilingEvent p(FUNC);
+  this.cachedGeometries.resize(0);
+  this.topologyVersions.resize(0);
+  this.valid = true;
+}

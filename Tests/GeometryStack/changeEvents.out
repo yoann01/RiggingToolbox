@@ -1,0 +1,33 @@
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryCache.update!(io GeometrySet, GeometryOperator)
+--function PolygonMeshSphereGenerator.evaluate!(EvalContext, io GeometrySet)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Update:positions
+--function PushModifier.evaluate!(EvalContext, io GeometrySet)
+function GeometryStack.notify!(Notifier, String, String):PushModifier.changed
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Restore:positions
+--function PushModifier.evaluate!(EvalContext, io GeometrySet)
+
+GeometryStack {
+  geomOperators:[
+    {
+      type: PolygonMeshSphereGenerator
+    }
+    {
+      type: PushModifier
+    }
+  ],
+  geomSet:   {
+    geometries:[
+      Sphere:{
+      },
+    ]
+    attributeGenerations:{
+      positions:2,
+      normals:1,
+      uvs0:1,
+    },
+  }
+}

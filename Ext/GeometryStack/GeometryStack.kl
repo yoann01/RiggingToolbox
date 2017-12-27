@@ -1,0 +1,362 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+require FabricStatistics;
+
+// pre-declaring the registry because it is loaded last in the fpm file. 
+object RiggingToolboxRegistry;
+
+interface IGeometryStack {
+  RiggingToolboxRegistry getRiggingToolboxRegistry();
+};
+
+object GeometryStack : Notifier, Listener, IGeometryStack, Persistable {
+  String name;
+  String filePath;
+
+  GeometrySet geomSet;
+  GeometryOperator geomOperators[];
+  CachePoint cachePoints[];
+  UInt32 dirtyPoint;
+
+  Boolean displayGeometries;
+  DrawingHandle handle;
+  Boolean renderingInitialized;
+  UInt32 geomSetVersion;
+  Color geomColors[String];
+
+  // e.g. If a deformer modifies positions, and the subsequent deformer
+  // ultilizes normals, and there is a dependency from normals to positions
+  // then normals have to be automatically recomputed before the next deformer is run. 
+  // \note This feature not yet integrated. Normals and tangents must still be explicitly computed. 
+  String implicitDependencies[String][];
+};
+
+
+function GeometryStack() {
+  this.init();
+}
+
+
+function GeometryStack.init!() {
+  this.geomSet = GeometrySet();
+  this.addAttributeDependency('normals', 'positions');
+  this.addAttributeDependency('tangents', 'positions');
+  this.addAttributeDependency('tangents', 'normals');
+  this.displayGeometries = true;
+
+  // This is a workaround to the fact that we can't control the order
+  // that the shaders are drawn. We want the OGLSurfaceShader to be drawn before
+  // any of the overlay shaders, so we construct it first and register it with
+  // the InlineDrawing system. 
+  InlineDrawing drawing = OGLInlineDrawing_GetInstance();
+  drawing.registerShader(OGLSurfaceShader());
+}
+
+
+function GeometryStack.addAttributeDependency!(String from, String to) {
+  if(!this.implicitDependencies.has(from)){
+    String emptyArray[];
+    this.implicitDependencies[from] = emptyArray;
+  }
+  this.implicitDependencies[from].push(to);
+}
+
+
+function GeometryStack.addGeometryOperator!(GeometryOperator op) {
+  this.geomOperators.push(op);
+  this.cachePoints.resize(this.geomOperators.size());
+
+  // Note: the cast causes the 'in' arg to become 'io' here.
+  Notifier notifier = op;
+  if(notifier)
+    notifier.addListener(this);
+}
+
+
+function GeometryOperator GeometryStack.getGeometryOperator(UInt32 index) {
+  return this.geomOperators[index];
+}
+
+
+function UInt32 GeometryStack.numGeometryOperators() {
+  return this.geomOperators.size();
+}
+
+// Recieves a notification from one of the notifiers. 
+// Normally this will be a geometry operator in the stack whose data has changed.
+function GeometryStack.notify!(Notifier notifier, String type, String data) {
+  AutoProfilingEvent p(FUNC+":" + notifier.type() + "." +type);
+  switch(type){
+  case 'changed':
+    for(Integer i=0; i<this.geomOperators.size(); i++){
+      Notifier op = this.geomOperators[i];
+      if(op === notifier){
+        if(i < this.dirtyPoint)
+          this.dirtyPoint = i;
+        // for(Integer j=i; j<this.geomOperators.size(); j++){
+        //   if(this.cachePoints[j] != null)
+        //     this.cachePoints[j].invalidate();
+        // }
+        break;
+      }
+    }
+    // Emit a notification that other object might recieve. 
+    // e.g. A Wrap deformer would recieve this notication and dirty it's stack. 
+    this.notify('changed', data);
+    break;
+  }
+}
+
+// Pull-model evaluation. Evaluation can be recursive when multiple stacks are used in conjunction.
+// e.g. 
+//  [ LoadAlembic, SkinningModifier ]
+//                                  |
+//               [ LoadAlembic, WrapModifier ] ->
+function GeometrySet GeometryStack.evaluate!(EvalContext context) {
+  AutoProfilingEvent p(FUNC);
+
+  // Report meaningful error if context is null
+  if (context == null)
+    throw("Context is null. Ensure an initialized EvalContext is passed.");
+
+  // this.dirtyPoint = 0;// force evaluation all the time.(disable caching)
+  if(this.dirtyPoint < this.geomOperators.size()){
+    for(Integer i=this.dirtyPoint; i<this.geomOperators.size(); i++){
+      GeometryOperator op = this.geomOperators[i];
+
+      // Now check the geometries if they have the attributes required by the next operation.
+      Boolean debug = true;
+      if(debug){
+        UInt32 deps[String] = op.getAttributeInteractions();
+        for(Integer k=0; k<this.geomSet.size(); k++){
+          String missingAttributes[];
+          for(key, value in deps){
+            if(value == AttrMode_Read || value == AttrMode_ReadWrite){
+              Ref<GeometryAttributes> attributes = this.geomSet.get(k).getAttributes();
+              if(!attributes.has(key))
+                missingAttributes.push(key);
+            }
+          }
+          if(missingAttributes.size() > 0){
+            setError("Cannot evaluate '" + op.type() + "'. Geometry missing required attributes:" + missingAttributes);
+            return this.geomSet;
+          }
+        }
+      }
+      // Generate cache points for each operator.
+      // Note: currently we are creating cache points for every operator
+      // but this is excessive. Many operators may not need to be cached.
+      CachePoint cachePoint = this.cachePoints[i];
+      if(cachePoint == null){
+        Generator generator = op;
+        if(generator)
+          cachePoint = GeometryCache();
+        else // modifier
+        {
+          // #8 Bugfix: Explicit type cast for interfaces in KL, otherwise GeometryAttributeCache returns null
+          BaseModifier mod = op; 
+          cachePoint = GeometryAttributeCache(mod);
+        }
+        this.cachePoints[i] = cachePoint;
+      }
+
+      // The data previous to this point has been re-computed. 
+      // The cache must be updated.
+      cachePoint.update(this.geomSet, op);
+      
+      // Evaluate the operator now that the geomSet is in the state ready for this operator.
+      op.evaluate(context, this.geomSet);
+
+      {
+        // Increment the modified attribute generations so that the caching system 
+        // knows which ones to restore in subsequent evaluations.
+        UInt32 deps[String] = op.getAttributeInteractions();
+        for(key, value in deps){
+          if(value == AttrMode_Write || value == AttrMode_ReadWrite){
+            this.geomSet.incrementAttributeGeneration(key);
+            // TODO: we could increment the attribute versions here too.
+          }
+        }
+      }
+    }
+    this.dirtyPoint = this.geomOperators.size();
+  }
+
+  if(this.displayGeometries && (this.handle==null || this.geomSetVersion != this.geomSet.getVersion())){
+    this.setupRendering();
+  }
+  else if(!this.displayGeometries && this.handle!=null)
+    this.handle = null;
+
+  if(this.geomSetVersion != this.geomSet.getVersion())
+    this.geomSetVersion = this.geomSet.getVersion();
+
+
+  return this.geomSet;
+}
+
+function GeometryStack.setupRendering!(){
+  // Construct a handle for this character instance. The handle will clean up the InlineDrawing when it is destroyed.
+  this.handle = DrawingHandle(this.name+"Handle");
+
+  // Now setup the rendering
+  InlineShader shader = this.handle.getDrawing().registerShader(OGLSurfaceShader());
+  InlineMaterial material = shader.getOrCreateMaterial(this.name+"Material");
+
+  for(Integer geomId=0; geomId<this.geomSet.size(); geomId++){
+    Geometry geom = this.geomSet.get(geomId);
+    String geomName = getGeomDebugName(geom);
+    String name = this.name + "_" + geomName;
+    InlineShape shape = null;
+    PolygonMesh mesh = geom;
+    if(mesh)
+      shape = InlineMeshShape(name, mesh);
+    else{
+      Lines lines = geom;
+      if(lines)
+        shape = InlineLinesShape(name, lines);
+      else{
+        Points points = geom;
+        if(points)
+          shape = InlinePointsShape(name, points);
+        else{
+          report("Warning in GeometryStack.setupRendering: unsupported geometry type:" + geom.type());
+          continue;
+        }
+      }
+    }
+    // Color color = Color(0.0,0.0,1.0);
+    Color color = this.geomColors.get(geomName, Color(0.0,0.0,1.0));
+    InlineInstance instance = SimpleInlineInstance(name + "_Instance", this.handle.rootTransform, shape, material);
+    instance.setInstanceUniform(InlineUniform('u_diffuseColor', color));
+  }
+}
+
+
+function GeometryStack.setDisplayGeometries!(Boolean displayGeometries){
+  if(this.displayGeometries != displayGeometries){
+    this.displayGeometries = displayGeometries;
+  }
+}
+
+/// Override this method to return a custom registry that can contain custom geometry operators.
+function RiggingToolboxRegistry GeometryStack.getRiggingToolboxRegistry(){
+  return getRiggingToolboxRegistry();
+}
+
+function JSONDictValue GeometryStack.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json();
+  JSONArrayValue geomOperatorsData();
+  for(UInt32 i=0; i<this.geomOperators.size(); i++){
+    geomOperatorsData.add(this.geomOperators[i].saveJSON(persistenceContext));
+  }
+  json.set("geomOperators", geomOperatorsData);
+  json.setBoolean('displayGeometries', this.displayGeometries);
+  return json;
+}
+
+function GeometryStack.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  // Call the virtual function to return the registry to be used. 
+  // A custom registry could be returned here enabling custom geometry operators to be constructed.
+  RiggingToolboxRegistry registry = IGeometryStack(this).getRiggingToolboxRegistry();
+  JSONArrayValue geomOperatorsData = json.get("geomOperators");
+  if(!geomOperatorsData)
+    throw("Error loading GeometryStack. JSON does not include a geomOperators array :" + json);
+  for(UInt32 i=0; i<geomOperatorsData.size(); i++){
+    JSONDictValue geomOperatorData = geomOperatorsData.get(i);
+    String type = geomOperatorData.getString("type");
+    GeometryOperator geomOp = registry.constructGeometryOperator(type);
+    geomOp.loadJSON(persistenceContext, geomOperatorData);
+    this.addGeometryOperator(geomOp);
+  }
+  if(json.has('displayGeometries'))
+    this.displayGeometries = json.getBoolean('displayGeometries');
+
+  // Load the dictionary specifying the colors of the geometires being rendered.
+  if(json.has('geometryColors')){
+    JSONDictValue geomColorsJson = json.get('geometryColors');
+    for(key, value in geomColorsJson.values)
+      this.geomColors[key] = JSONDictValue(value).toColor();
+  }
+}
+
+
+function GeometryStack.loadJSONString!(PersistenceContext persistenceContext, String jsonString){
+  JSONDoc doc();
+  doc.parse(jsonString);
+  this.loadJSON(persistenceContext, doc.root);
+}
+
+
+function GeometryStack.loadJSONFile!(PersistenceContext persistenceContext, String filePath){
+  FilePath expandedPath = FilePath(filePath).expandEnvVars();
+  if(expandedPath.isRelative())
+    expandedPath = FilePath(persistenceContext.filePath) / expandedPath;
+
+  if(!expandedPath.exists()){
+    throw("File not found:" + expandedPath.string());
+  }
+  this.filePath = filePath;
+  String expandedPathStr = expandedPath.string();
+
+  PersistenceContext subpersistenceContext();
+  expandedPath.removeFileName();
+  subpersistenceContext.filePath = expandedPath.string();
+  TextReader reader(expandedPathStr);
+  this.loadJSONString(subpersistenceContext, reader.readAll());
+}
+
+
+function GeometryStack.loadJSONFile!(String filePath){
+  PersistenceContext persistenceContext();
+  this.loadJSONFile( persistenceContext, filePath);
+}
+
+
+// The scene file is being saved, and the KL object can save its own data to the scene file.
+function String GeometryStack.saveDataToString(PersistenceContext persistenceContext) {
+  JSONDoc doc();
+  doc.root = this.saveJSON(persistenceContext);
+  return doc.write();
+}
+
+// The scene file has been loaded and now the KL obect can load its custom data. 
+function GeometryStack.loadDataFromString!(PersistenceContext persistenceContext, String data) {
+  JSONDoc doc();
+  if(doc.parse(data)){
+    this.loadJSON(persistenceContext, doc.root);
+  }
+  else{
+    setError("ERROR Loading GeometryStack. Saved JSON data is not valid");
+  }
+}
+
+function String GeometryStack.getFilePath(){
+  return this.filePath;
+}
+
+
+
+/// Generates a Description string of this stack.
+/// \param indent The indentation to use when generating the string. 
+function String GeometryStack.getDesc(String indent, Boolean includeGeometryTolopology) {
+  String desc;
+  desc += indent + "GeometryStack { \n";
+  desc += indent + "  geomOperators:[ \n";
+  for(Integer i=0; i<this.geomOperators.size(); i++){
+    desc += this.geomOperators[i].getDesc(indent+'    ') + "\n";
+  }
+  desc += indent + "  ],\n";
+  desc += indent + "  geomSet: " + this.geomSet.getDesc(indent + '  ',  includeGeometryTolopology) + '\n';
+  desc += indent + "}";
+  return desc;
+}
+
+/// Generates a Description string of this stack.
+function String GeometryStack.getDesc() {
+  return this.getDesc("", false);
+}

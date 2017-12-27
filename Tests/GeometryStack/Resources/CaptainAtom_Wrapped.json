@@ -1,0 +1,18 @@
+{
+  "geomOperators": [
+    {
+     "type": "AlembicGeometryGenerator",
+     "filePath": "D:/Resources/captainatom_project/cache/CaptainAtom.abc",
+     "geometryNames": ["captainatom_body_geoShape", "captainatom_hair_geoShape"]
+    },
+    {
+     "type": "WrapModifier",
+     "displayDebugging": false
+    }
+  ],
+  "geometryColors": {
+    "captainatom_body_geoShape": { "r": 1.0, "g": 0.6, "b": 0.6 },
+    "captainatom_hair_geoShape": { "r": 0.6, "g": 0.3, "b": 0.3 }
+  },
+  "displayGeometries": false
+}

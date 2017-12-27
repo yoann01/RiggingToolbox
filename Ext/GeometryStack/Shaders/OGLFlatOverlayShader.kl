@@ -1,0 +1,107 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require InlineDrawing;
+
+/**
+\versionadded 1.12.0
+
+The OGLFlatOverlayShader inherits the OGLInlineShader. It extends the OGLInlineShader for shading with flat colors.
+
+\rst
+Uniforms
+----------
+=============== ============ ===================================== ==================================
+Name            Type         Description                           Default
+=============== ============ ===================================== ==================================
+u_color         Color        The diffuse color                     Color(1.0, 0.0, 0.0)
+=============== ============ ===================================== ==================================
+
+Attributes
+----------
+=============== ============ =====================================
+Name            Type         Description
+=============== ============ =====================================
+positions       Vec3         Geometry positions
+=============== ============ =====================================
+\endrst
+
+\example
+  InlineDrawing draw = OGLInlineDrawing();
+  InlineShader shader = draw.registerShader(OGLFlatOverlayShader());
+  InlineMaterial mat = shader.getOrCreateMaterial('green');
+  mat.setUniform('u_color', Color(0.0, 1.0, 0.0));
+\endexample
+*/
+object OGLFlatOverlayShader: OGLInlineShader {};
+
+/// default constructor
+function OGLFlatOverlayShader() {
+  // Avoid calling the init method if this default constructor is being invoked 
+  // during the construction of a derived object.
+  if(this.type() == OGLFlatOverlayShader)
+    this.init(String(this.type()));
+}
+
+/// default constructor taking a name
+function OGLFlatOverlayShader(String name) {
+  this.init(name);
+}
+
+/// initialize the shader using a name.
+/// \internal
+function OGLFlatOverlayShader.init!(String name) {
+  this.name = name;
+  this.setVertexCode("
+      #version 120 // We require OpenGL 2.1 for InlineDrawing, which supports GLSL 1.2
+
+      uniform mat4 u_viewMatrix;
+      uniform mat4 u_projection;
+      uniform mat4 u_modelMatrix;
+      
+      attribute vec4 positions;
+
+      void main(){
+        gl_Position = u_projection * (u_viewMatrix * (u_modelMatrix * positions));
+      }
+    ");
+
+  this.setFragmentCode("
+      #version 120 // We require OpenGL 2.1 for InlineDrawing, which supports GLSL 1.2
+      
+      uniform vec4 u_color;
+      
+      void main(){
+        gl_FragColor = u_color;
+      }
+    ");  
+  this.defineUniform(InlineUniform("u_viewMatrix", Mat44()));
+  this.defineUniform(InlineUniform("u_projection", Mat44()));
+  this.defineUniform(InlineUniform("u_modelMatrix", Mat44()));
+  this.defineUniform(InlineUniform('u_color', Color(1.0, 0.0, 0.0)));
+  this.defineAttribute('positions', "Vec3");
+}
+
+/// called by the InlineDrawing, should not be called manually
+/// \internal
+function Boolean OGLFlatOverlayShader.draw!(io DrawContext context) {
+
+  // By clamping the depth range for the gizmos to 0.0 -> 0.1 we ensure that the 
+  // gizmos are drawn over the top of all other geometris(except geoms closer than 0.1 in the depth buffer)
+  // Furthermore, the gizmos still utilize the 0.1 range of the depth buffer to ensure that they are correctly
+  // rendered over the top of one another. 
+  glDepthRange(0.0, 0.1); 
+
+  // Enable double sided lighting because some gizmos are made up of a flat surfaces
+  //  we need to see from both sides. E.g. the planar translation gizmo.
+  glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE);
+
+  Boolean result = this.parent.draw(context);
+ 
+  // Reset the depth mode. (Maybe this isn't necessay)
+  glDepthRange(0.0, 1.0); 
+
+  return result;
+}
+

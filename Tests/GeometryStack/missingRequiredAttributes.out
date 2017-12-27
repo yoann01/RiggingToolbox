@@ -1,0 +1,7 @@
+Error: Cannot evaluate 'PushModifier'. Geometry missing required attributes:["normals"]
+KL stack trace:
+[ST] 1 kl.internal.String.SetErrorDataPtrAndLength.AS0()
+[ST] 2 function.setError.R.ST()
+[ST] 3 method.evaluate.L.UO_GeometryStack.R.OO_EvalContext() GeometryStack.kl:145
+[ST] 4 operator.entry() missingRequiredAttributes.kl:12
+[ST] 5 kl.internal.entry.stub.cpu()

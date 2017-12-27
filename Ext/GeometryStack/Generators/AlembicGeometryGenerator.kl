@@ -1,0 +1,227 @@
+/*
+ *  Copyright 2010-2014 Fabric Software Inc. All rights reserved.
+ */
+
+require Alembic;
+require AlembicWrapper;
+require Characters;
+require Parameters;
+
+//////////////////////////////////////
+// Factory definition.
+
+object AlembicGeometryGeneratorFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator AlembicGeometryGeneratorFactory.constructGeometryOperator(){
+  AlembicGeometryGenerator geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+/**
+  The AlembicGeometryGenerator generates geometry data by loading an parsing an alembic file.
+  Multiple geometries might be loaded by the AlembicGeometryGenerator and these geometries woul propagate
+  up the stack. The AlembicGeometryGenerator c
+  
+  The JSON data provided to load an alembic asset might look like the following.
+    {
+     "type": "AlembicGeometryGenerator",
+     "filePath": "AlembicData/characterCache.abc",
+     "geometryNames": ["pPlaneShape*"]
+    }
+
+  - The 'filePath' item specifies the relative file to the alembic file to be loaded.
+  - The 'geometryNames' item specifies a string to use to resolve loaded geometries. Note: wildcards can be used to specify many geometires at once.
+
+  \seealso PolygonMeshPlaneGenerator, PolygonMeshSphereGenerator
+*/
+object AlembicGeometryGenerator : BaseGenerator {
+
+  /// the file path of the alembic file.
+  /// \note the Path can be relative to the path of the JSON file being loaded. this is 
+  /// usually the JSON file for the GeometryStack its self. The path can also include environment variables
+  /// and these variables will automatically be resolved at runtime. 
+  String filePath;
+
+  /// \internal
+  FilePath expandedPath;
+
+  /// The names of the geometry name queries to use to select geometries to be included in the deformation pipeline.
+  String geometryNames[];
+
+  Scalar time;
+};
+
+
+/// Sets the file path of the alembic file. 
+inline  AlembicGeometryGenerator.setFilePath!(String filePath){
+  this.filePath = filePath;
+  this.expandedPath = FilePath(this.filePath).expandEnvVars();
+
+  if(!this.expandedPath.exists()){
+    throw("File not found:" + this.expandedPath.string());
+  }
+
+  String data;
+  this.notify('changed', data);
+}
+
+/// Sets the file path of the alembic file. 
+inline  AlembicGeometryGenerator.setGeometryNames!(String geometryNames[]){
+  this.geometryNames = geometryNames;
+  String data;
+  this.notify('changed', data);
+}
+
+/// Sets the time to be used to retrieve the current sample.
+inline  AlembicGeometryGenerator.setTime!(String geometryNames[]){
+  this.geometryNames = geometryNames;
+  String data;
+  this.notify('changed', data);
+}
+
+/// Returns the file path of the alembic file. 
+inline String AlembicGeometryGenerator.getFilePath(){
+  return this.filePath;
+}
+
+////////////////////////////////////////////////////
+// Internal methods.
+
+/// Returns the name of an o path for any alembic path
+/// \internal
+inline String AlembicGeometryGenerator.getNameFromPath(String pathStr) {
+  String path[] = pathStr.split('/');
+  return path[path.size()-1];
+}
+
+
+/// Returns the parent path for any alembic path
+/// \internal
+function String AlembicGeometryGenerator.getParentPath(String pathStr) {
+  String path[] = pathStr.split('/');
+  path.pop();
+  return "/".join(path);
+}
+
+/// computes the global transform of an item in the alembic hierarchy./
+/// \internal
+function Xfo AlembicGeometryGenerator.computeGlobalXfo(Scalar time, io AlembicArchiveReader archive, String pathStr){
+  AlembicXformReader xformReader = archive.getXform(pathStr);
+  Xfo xfo();
+  if(xformReader)
+    xfo = xformReader.readSample(time);
+
+  String parentPath = this.getParentPath(pathStr);
+  if(parentPath != ""){
+    xfo = this.computeGlobalXfo(time, archive, parentPath) * xfo;
+  }
+  return xfo;
+}
+
+
+/// Evaluate the generator.
+/// \param context The current eval context
+/// \param geomSet The geomSet to be populated
+function AlembicGeometryGenerator.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+  if(!this.expandedPath.exists()){
+    throw("File not found:" + this.expandedPath.string());
+  }
+
+  report("Importing:" + this.expandedPath.string());
+
+  geomSet.resize(0);
+
+  AlembicArchiveReader archive(this.expandedPath.string());
+  AlembicPolyMeshReader readers[];
+
+  String xformPaths[] = archive.getPathsOfType('Xform');
+  String polymeshPaths[] = archive.getPathsOfType('PolyMesh');
+
+  readers.resize(polymeshPaths.size());
+
+  for(Size i=0; i<polymeshPaths.size(); i++) {
+    String name = this.getNameFromPath(polymeshPaths[i]);
+    
+    // Only include the geomety if it matches the name filters. (or there are no name filters)
+    if(this.geometryNames.size() != 0 && !applyNameFilters(name, this.geometryNames))
+      continue;
+
+    readers[i] = archive.getPolyMesh(polymeshPaths[i]);
+
+    PolygonMesh mesh = PolygonMesh();
+    mesh.debugName = name; // Set the debug name so we can easily track this geom in future. 
+    readers[i].readSample(this.time, mesh);
+
+    // Get the transform from the PolygonMesh (parent transform)
+    String transform = this.getParentPath(polymeshPaths[i]);
+
+    // Compute the global transform for this sample and save it as meta data. 
+    Xfo globalXfo = this.computeGlobalXfo(this.time, archive, transform);
+    Mat44Param globalTransform('globalTransform', globalXfo.toMat44());
+    AutoLock AL(mesh.metaData.simpleLock);
+    mesh.metaData.lockedSet('globalTransform', globalTransform);
+
+    geomSet.add(mesh);
+  }
+
+  if(geomSet.size() == 0){
+    // Generate a helpfull message because its unlikely that users want no geometries from a file.
+    report("Warning: No geomeries found in file that match the name filters specified:" + this.geometryNames);
+    for(Size i=0; i<polymeshPaths.size(); i++) {
+      String name = this.getNameFromPath(polymeshPaths[i]);
+      report("Name:" + name + " path:" + polymeshPaths[i]);
+    }
+    return;
+  }
+}
+
+/// Saves a json dict
+function JSONDictValue AlembicGeometryGenerator.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json = this.parent.saveJSON(persistenceContext);
+
+  json.setString('filePath', this.filePath);
+
+  JSONArrayValue geometryNamesData();
+  for(Integer i=0; i<this.geometryNames.size(); i++)
+    geometryNamesData.addString(this.geometryNames[i]);
+  json.set('geometryNames', geometryNamesData);
+
+  return json;
+}
+
+/// Loads a json dict
+function AlembicGeometryGenerator.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  this.parent.loadJSON(persistenceContext, json);
+
+  JSONArrayValue geometryNamesData = json.get('geometryNames');
+  if(geometryNamesData)
+    this.setGeometryNames(geometryNamesData.toStringArray());
+
+  this.filePath = json.getString('filePath');
+
+    // Check for an absolute file path, then a relative path.
+  this.expandedPath = FilePath(this.filePath).expandEnvVars();
+
+  if(this.expandedPath.isRelative()){
+    this.expandedPath = FilePath(persistenceContext.filePath) / this.expandedPath;
+  }
+}
+
+
+/// Generates a Description string of the generator.
+/// \param indent The indentation to use when generating the string. 
+function String AlembicGeometryGenerator.getDesc(String indent) {
+  String desc;
+  desc += indent + "{\n";
+  desc += indent + "  type: "+ this.type() + ",\n";
+  desc += indent + "  filePath: "+ this.filePath + "\n";
+  desc += indent + "  expandedPath: "+ this.expandedPath.string() + "\n";
+  desc += indent + "}";
+  return desc;
+}

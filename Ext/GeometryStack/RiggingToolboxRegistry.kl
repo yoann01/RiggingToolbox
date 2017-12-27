@@ -1,0 +1,55 @@
+/*
+ *  Copyright 2010-2012 Fabric Engine Inc. All rights reserved.
+ */
+require Singletons;
+
+
+/// The registry is a factory object used to construct the various types of geoetry operators.
+/// Each type of operator defines a factory object, and each of those factory objects is added here.
+/// \note: 
+object RiggingToolboxRegistry {
+  GeometryOperatorFactory geomOpFactories[String];
+};
+
+function RiggingToolboxRegistry(){
+  RiggingToolboxRegistry registry = Singleton_get('RiggingToolboxRegistry');
+  if(registry != null) {
+    throw("RiggingToolboxRegistry already constructed. Please use 'getRiggingToolboxRegistry' instead.");
+  }
+  Singleton_set('RiggingToolboxRegistry', this);
+
+  this.registerGeometryOperator('AlembicGeometryGenerator', AlembicGeometryGeneratorFactory());
+  this.registerGeometryOperator('AlembicSkinnedMeshGeometryGenerator', AlembicSkinnedMeshGeometryGeneratorFactory());
+  this.registerGeometryOperator('SkinningModifier', SkinningModifierFactory());
+  this.registerGeometryOperator('PolygonMeshPlaneGenerator', PolygonMeshPlaneGeneratorFactory());
+  this.registerGeometryOperator('PolygonMeshSphereGenerator', PolygonMeshSphereGeneratorFactory());
+  this.registerGeometryOperator('BlendShapesModifier', BlendShapesModifierFactory());
+  this.registerGeometryOperator('ComputeNormalsModifier', ComputeNormalsModifierFactory());
+  this.registerGeometryOperator('ComputeTangentsModifier', ComputeTangentsModifierFactory());
+  this.registerGeometryOperator('DeltaMushModifier', DeltaMushModifierFactory());
+  this.registerGeometryOperator('PushModifier', PushModifierFactory());
+  this.registerGeometryOperator('SkinningModifier', SkinningModifierFactory());
+  this.registerGeometryOperator('WeightmapModifier', WeightmapModifierFactory());
+  this.registerGeometryOperator('WrapModifier', WrapModifierFactory());
+}
+
+
+function RiggingToolboxRegistry getRiggingToolboxRegistry(){
+  // check if we can get the singleton
+  RiggingToolboxRegistry registry = Singleton_get('RiggingToolboxRegistry');
+  if(registry == null) {
+    registry = RiggingToolboxRegistry();
+  }
+  return registry;
+}
+
+function RiggingToolboxRegistry.registerGeometryOperator!(String typeName, GeometryOperatorFactory deformerFactory){
+  this.geomOpFactories[typeName] = deformerFactory;
+}
+
+function GeometryOperator RiggingToolboxRegistry.constructGeometryOperator(String typeName){
+  if(!this.geomOpFactories.has(typeName)){
+    throw("GeometryOperator type not found:" + typeName);
+  }
+  return this.geomOpFactories[typeName].constructGeometryOperator();
+}

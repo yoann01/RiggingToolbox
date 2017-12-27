@@ -1,0 +1,13 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+object Notifier;
+
+/// An interface for objects that listen to changes in Notifiers.
+interface Listener {
+  notify!(Notifier notifier, String type, String data);
+};

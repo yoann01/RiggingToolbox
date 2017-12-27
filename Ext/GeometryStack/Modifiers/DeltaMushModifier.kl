@@ -1,0 +1,463 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+
+//////////////////////////////////////
+// Factory definition.
+
+object DeltaMushModifierFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator DeltaMushModifierFactory.constructGeometryOperator(){
+  DeltaMushModifier geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+
+object DeltaMushModifier : BaseModifier {
+  Vec3 deltas[][];
+
+  UInt32 iterations;
+  Boolean bound;
+  String referenceGeometryNames[];
+  PolygonMesh referenceGeometries[];
+  UInt32 boundVersion;
+
+  Boolean useMask;
+  String maskWeightmapName;
+
+  Boolean displayDebugging;
+  Lines debugLines[];
+  DrawingHandle handle;
+};
+
+
+function DeltaMushModifier(){
+  this.iterations = 20;
+  this.useMask = true;
+  this.maskWeightmapName = 'DeltaMushModifierWeightMap';
+}
+
+
+
+function UInt32[String] DeltaMushModifier.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_ReadWrite;
+  result['normals'] = AttrMode_ReadWrite;
+  return result;
+}
+
+function DeltaMushModifier.setNumIterations!(UInt32 iterations){
+  if(this.iterations != iterations){
+    this.iterations = iterations;
+    this.bound = false;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+
+function DeltaMushModifier.setUseMask!(Boolean useMask){
+  if(this.useMask != useMask){
+    this.useMask = useMask;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+function DeltaMushModifier.setDisplayDebugging!(Boolean displayDebugging){
+  if(this.displayDebugging != displayDebugging){
+    this.displayDebugging = displayDebugging;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+
+
+function Mat44 deltaMushModifier_buildRefFrame(PolygonMesh mesh, UInt32 index, Vec3 positionValues[]){
+
+  Mat44 m;
+  Vec3 p1 = positionValues[index];
+
+  LocalL16UInt32Array surroundingPoints;
+  mesh.getPointSurroundingPoints( index, false, surroundingPoints );
+  UInt32 nbNei = surroundingPoints.size();
+  if( nbNei == 0 ) 
+    return m;
+  Vec3 p2 = positionValues[surroundingPoints.get(0)];
+  Vec3 p3 = positionValues[surroundingPoints.get(1)];
+
+  Vec3 dir = p2 - p1;
+  Vec3 nrm = dir.cross(p3 - p1);
+  Quat q;
+  q.setFromDirectionAndUpvector(dir, nrm);
+  m.set(p1, q.toMat33(), Vec3(1,1,1));
+  return m;
+}
+
+
+struct SmoothPosMRInput {
+  PolygonMesh mesh;
+  Vec3 positions[];
+};
+
+
+// These are some internal methods borrowed from PolygonMesh to modify the cloned positions array.
+inline deltaMushModifier_setPointIterAttributeValues(PolygonMesh mesh,  DataIter pointIter, io Vec3 attributeValues[], Vec3 value ) {
+  PolygonMesh_UnsharedAttributeIndexIter iter = mesh.topology.getPointIterUnsharedAttributeIndexIter( pointIter );
+  UInt32 attributeIndex;
+  while( mesh.topology.PolygonMesh_UnsharedAttributeIndexIterGetNext(iter, attributeIndex) )
+    attributeValues[ attributeIndex ] = value;
+}
+
+inline deltaMushModifier_setPointAttributeValues(PolygonMesh mesh, Size point, io Vec3 attributeValues[], Vec3 value ) {
+  DataIter pointIter = mesh.getPointIter( point );
+  if( pointIter )
+    deltaMushModifier_setPointIterAttributeValues(mesh, pointIter, attributeValues, value );
+  else
+    attributeValues[point] = value;
+}
+
+
+operator deltaMushModifier_smoothPos<<<index>>>(io Vec3 positions[], io PolygonMesh mesh) {
+
+  //Pseudo-gaussian: center weight = 0.5, neighbor weights sum = 0.5
+  Vec3 position = positions[ index ];
+
+  LocalL16UInt32Array surroundingPoints;
+  mesh.getPointSurroundingPoints( index, false, surroundingPoints );
+  UInt32 nbNei = surroundingPoints.size();
+  if( nbNei ) {
+    Vec3 neiSum = Vec3(0,0,0);
+    for( UInt32 i = 0; i < nbNei; ++i ) {
+      UInt32 neiPt = surroundingPoints.get(i);
+      neiSum += positions[neiPt];
+    }
+    neiSum /= Scalar(nbNei);
+    position = ( position + neiSum ) * 0.5;
+    deltaMushModifier_setPointAttributeValues(mesh, Size(index), positions, position );
+  }
+}
+
+// operator deltaMushModifier_smoothPosNorm<<<index>>>(io Vec3 positions[], io Vec3 normals[], io PolygonMesh mesh) {
+//   //Pseudo-gaussian: center weight = 0.5, neighbor weights sum = 0.5
+//   Vec3 position = positions[ index ];
+//   Vec3 normal = normals[ index ];
+
+//   LocalL16UInt32Array surroundingPoints;
+//   mesh.getPointSurroundingPoints( index, false, surroundingPoints );
+//   UInt32 nbNei = surroundingPoints.size();
+//   if( nbNei ) {
+//     Vec3 neiPosSum = Vec3(0,0,0);
+//     Vec3 neiNormSum = Vec3(0,0,0);
+//     for( UInt32 i = 0; i < nbNei; ++i ) {
+//       UInt32 neiPt = surroundingPoints.get(i);
+//       neiPosSum += positions[neiPt];
+//       neiNormSum += normals[neiPt];
+//     }
+//     neiPosSum /= Scalar(nbNei);
+//     mesh.setPointPosition( index, ( position + neiPosSum ) * 0.5 );
+//     normal += neiNormSum;
+//     normal.setUnit();
+//     mesh.setPointNormal( index, normal );
+//   }
+// }
+
+
+operator deltaMushModifier_computePointBinding<<<index>>>(
+  PolygonMesh mesh,
+  Vec3 mushedPositions[],
+  io Vec3 deltas[]
+){
+  // Build a reference frame. 
+  Mat44 mat44 = deltaMushModifier_buildRefFrame(mesh, index, mushedPositions);
+
+  // Compute the delta between the relaxed frame and the original position.
+  deltas[index] = mat44.inverse() * mesh.positionsAttribute.values[index];
+}
+
+operator deltaMushModifier_applyDeltas<<<index>>>(
+  io PolygonMesh mesh,
+  Vec3 mushedPositions[],
+  Vec3 deltas[],
+  Boolean displayDebugging,
+  io Lines debugLines
+){
+  Mat44 mat44 = deltaMushModifier_buildRefFrame(mesh, index, mushedPositions);
+  Vec3 newPos = mat44 * deltas[index];
+  mesh.setPointPosition( index, newPos );
+
+  if(displayDebugging){
+    debugLines.indices[(index*2)] = (index*2);
+    debugLines.indices[(index*2)+1] = (index*2)+1;
+    debugLines.setPosition((index*2), mushedPositions[index]);
+    debugLines.setPosition((index*2)+1, newPos);
+  }
+}
+
+operator deltaMushModifier_applyDeltas_Masked<<<index>>>(
+  io PolygonMesh mesh,
+  Vec3 mushedPositions[],
+  Vec3 deltas[],
+  Scalar maskWeightmapValues[],
+  Boolean displayDebugging,
+  io Lines debugLines
+){
+  Vec3 newPos;
+  if(maskWeightmapValues[index] < 1.0){
+    Vec3 originalPos = mesh.getPointPosition( index );
+    Mat44 mat44 = deltaMushModifier_buildRefFrame(mesh, index, mushedPositions);
+
+    newPos = mat44 * deltas[index];
+    mesh.setPointPosition( index, newPos.linearInterpolate(originalPos, maskWeightmapValues[index]));
+  }
+  else{
+    newPos = mesh.getPointPosition( index );
+  }
+
+  if(displayDebugging){
+    debugLines.indices[(index*2)] = (index*2);
+    debugLines.indices[(index*2)+1] = (index*2)+1;
+    debugLines.setPosition((index*2), mushedPositions[index]);
+    debugLines.setPosition((index*2)+1, newPos);
+  }
+}
+
+operator deltaMushModifier_computeMeshBinding<<<index>>>(
+  PolygonMesh referenceGeometries[],
+  io Vec3 deltas[][],
+  UInt32 iterations
+){
+  PolygonMesh mesh = referenceGeometries[index];
+  // Cache the initial positions of the points before relaxing.
+  Vec3 mushedPositions[] = mesh.positionsAttribute.values.clone();
+
+  for(UInt32 i=0; i<iterations; i++){
+    // relax the mesh, causing it to lose volume.
+    deltaMushModifier_smoothPos<<<mesh.pointCount()>>>(mushedPositions, mesh);
+  }
+
+  deltas[index].resize(mesh.pointCount());
+  
+  // compute the deltas between the relaxed mesh, and the original vertex positions.
+  deltaMushModifier_computePointBinding<<<mesh.pointCount()>>>(
+    mesh,
+    mushedPositions,
+    deltas[index]
+  );
+}
+
+operator deltaMushModifier_deformGeometries<<<index>>>(
+  io GeometrySet geomSet,
+  Vec3 deltas[][],
+  UInt32 iterations,
+  Boolean useMask,
+  String maskWeightmapName,
+  Boolean displayDebugging,
+  io Lines debugLines[]
+){
+
+  PolygonMesh mesh = geomSet.get(0);
+  if(!mesh){
+    report("Warning in DeltaMushModifier: geometry is not a polygon mesh:" + getGeomDebugName(mesh));
+    return;
+  }
+
+  if(displayDebugging){
+    if(debugLines[index] == null)
+      debugLines[index] = Lines();
+    if(debugLines[index].lineCount() != mesh.pointCount()){
+      debugLines[index].attributes.resize( mesh.pointCount() * 2 );
+      debugLines[index].indices.resize( mesh.pointCount() * 2 );
+      debugLines[index].incrementVersion();
+    }
+    // Always increment the positoins version as they will be re-geomuted in the following kernel.
+    debugLines[index].incrementPositionsVersion();
+  }
+
+  Vec3 mushedPositions[] = mesh.positionsAttribute.values.clone();
+
+  for(UInt32 i=0; i<iterations; i++){
+    // relax the mesh, causing it to lose volume.
+    deltaMushModifier_smoothPos<<<mesh.pointCount()>>>(mushedPositions, mesh);
+  }
+
+  // Re-apply the deltas to re-inflate the mesh.
+  // (Even when binding, the mesh is deflated, so it must be re-inflated)
+  Ref<ScalarAttribute> weightMap = null;
+  if(useMask && maskWeightmapName.length() > 0){
+    weightMap = mesh.getAttribute(maskWeightmapName, ScalarAttribute);
+    if(!weightMap)
+      report("Warning in DeltaMushModifier: Geometry does not have the scalar attribute specified by the maskWeightmapName:"+maskWeightmapName);
+  }
+  if(weightMap){
+    // Use a special kernel to inflate the mesh that uses the mask. 
+    // this is cheaper than checking the mask in every point.
+    deltaMushModifier_applyDeltas_Masked<<<mesh.pointCount()>>>(
+      mesh,
+      mushedPositions,
+      deltas[index],
+      weightMap.values,
+      displayDebugging,
+      debugLines[index]
+    );
+  }
+  else{
+    deltaMushModifier_applyDeltas<<<mesh.pointCount()>>>(
+      mesh,
+      mushedPositions,
+      deltas[index],
+      displayDebugging,
+      debugLines[index]
+    );
+  }
+  mesh.incrementPointPositionsVersion();
+
+}
+
+function DeltaMushModifier.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+  
+  // by adding the iterations to the version, simply changing iterations causes the binding to be invalidated.
+  if(geomSet.getVersion()+this.iterations != this.boundVersion){
+    this.bound = false;
+    this.deltas.resize(geomSet.size());
+    this.debugLines.resize(geomSet.size());
+
+    // Note: We could provide a way to query the original undeformed geometry from the geomSet. 
+    // As a geometry is deformed, its original values are usually cached in an Attribute cache. 
+    // The original values could be attached back the geometry as meta data. This would be much cleaner
+    // than loading the alembic file 2x as we do here.
+
+    if(geomSet.size() != this.referenceGeometries.size())
+      throw("Reference Geometries count:" + this.referenceGeometries.size() + " does not match the current count of the geometries in the stack:" + geomSet.size());
+
+    for(Integer geomId=0; geomId<geomSet.size(); geomId++){
+      PolygonMesh mesh = geomSet.get(geomId);
+      if(!mesh || mesh.pointCount() != this.referenceGeometries[geomId].pointCount())
+        throw("Reference Geometries point counts to not match the current geometries in the stack.");
+    }
+
+    deltaMushModifier_computeMeshBinding<<<geomSet.size()>>>(
+      this.referenceGeometries,
+      this.deltas,
+      this.iterations
+      );
+  }
+  if( this.iterations > 0)
+    deltaMushModifier_deformGeometries<<<geomSet.size()>>>(
+      geomSet,
+      this.deltas,
+      this.iterations,
+      this.useMask,
+      this.maskWeightmapName,
+      this.displayDebugging,
+      this.debugLines
+      );
+
+  if(!this.bound){
+    this.boundVersion = geomSet.getVersion()+this.iterations;
+    this.bound = true;
+  }
+
+  if(this.displayDebugging && this.handle==null && this.iterations > 0)
+    this.setupRendering();
+  else if((!this.displayDebugging && this.handle!=null) || this.iterations == 0)
+    this.handle = null;
+}
+
+function DeltaMushModifier.setupRendering!(){
+
+  // Construct a handle for this character instance. The handle will clean up the InlineDrawing when it is destroyed. 
+  this.handle = DrawingHandle("DeltaMushModifierHandle");
+
+  // Now setup the rendering
+  InlineShader shader = this.handle.getDrawing().registerShader(OGLFlatOverlayShader());
+  InlineMaterial material = shader.getOrCreateMaterial("DeltaMushModifierMaterial");
+
+  for(Integer geomId=0; geomId<this.debugLines.size(); geomId++){
+    String name = "DeltaMushModifier_" + String(geomId);
+    InlineShape shape = InlineLinesShape(name, this.debugLines[geomId]);
+    InlineInstance instance = SimpleInlineInstance(name + "_Instance", this.handle.rootTransform, shape, material);
+    instance.setInstanceUniform(InlineUniform('u_color', Color(1.0,0.0,0.0)));
+  }
+}
+
+
+/// Loads the data from the alembic file
+/// \internal
+function DeltaMushModifier.loadReferenceFromAlembic!(FilePath expandedPath){
+  report("loadReferenceFromAlembic:" + expandedPath.string());
+  AutoProfilingEvent p(FUNC);
+  AlembicArchiveReader archive(expandedPath.string());
+  String polymeshPaths[] = archive.getPathsOfType('PolyMesh');
+
+  for(UInt32 i=0; i<polymeshPaths.size(); i++) {
+    String name = BlendShapesModifier_getNameFromPath(polymeshPaths[i]);
+    if(applyNameFilters(name, this.referenceGeometryNames)){
+      AlembicPolyMeshReader reader = archive.getPolyMesh(polymeshPaths[i]);
+      PolygonMesh mesh = PolygonMesh();
+      reader.readSample(0.0, mesh);
+      this.referenceGeometries.push(mesh);
+    }
+  }
+}
+
+
+function JSONDictValue DeltaMushModifier.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json = this.parent.saveJSON(persistenceContext);
+  json.setInteger('iterations', this.iterations);
+  json.setBoolean('displayDebugging', this.displayDebugging);
+  return json;
+}
+
+function DeltaMushModifier.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  this.parent.loadJSON(persistenceContext, json);
+
+  if(json.has('iterations'))
+    this.iterations = json.getInteger('iterations');
+
+  if(json.has('displayDebugging'))
+    this.displayDebugging = json.getBoolean('displayDebugging');
+
+  if(json.has('useMask'))
+    this.useMask = json.getBoolean('useMask');
+
+  if(json.has('maskWeightmapName'))
+    this.maskWeightmapName = json.getString('maskWeightmapName');
+
+  if(!json.has('referenceGeometryNames'))
+    throw("Error loading DeltaMushModifier JSON. Missing value: \"referenceGeometryNames\"");
+  JSONArrayValue referenceGeometryNames = json.get('referenceGeometryNames');
+  if(referenceGeometryNames)
+    this.referenceGeometryNames = referenceGeometryNames.toStringArray();
+
+  if(json.has('filePath')){
+    String filePath = json.getString('filePath');
+
+    // Check for an absolute file path, then a relative path.
+    FilePath expandedPath = FilePath(filePath).expandEnvVars();
+
+    if(expandedPath.isRelative()){
+      expandedPath = FilePath(persistenceContext.filePath) / expandedPath;
+    }
+
+    if(!expandedPath.exists()){
+      throw("File not found:" + expandedPath.string());
+    }
+
+    this.loadReferenceFromAlembic(expandedPath);
+
+  }
+}
+
+

@@ -1,0 +1,17 @@
+
+require RiggingToolbox;
+
+operator entry(){
+
+  AlembicGeometryGenerator alembicGenerator();
+  alembicGenerator.setFilePath("${FABRIC_RIGGINGTOOLBOX_PATH}/Tests/GeometryStack/Resources/cubeTest.abc");
+
+  EvalContext context();
+  GeometrySet geomSet();
+  alembicGenerator.evaluate(context, geomSet);
+
+  report("NumGeometries:" + geomSet.size);
+  for(Integer i=0; i<geomSet.size; i++){
+    report(geomSet.get(i).getDesc(false, false));
+  }
+}

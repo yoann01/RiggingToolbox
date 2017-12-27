@@ -1,0 +1,182 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+
+//////////////////////////////////////
+// Factory definition.
+
+object ComputeNormalsModifierFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator ComputeNormalsModifierFactory.constructGeometryOperator(){
+  ComputeNormalsModifier geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+
+object ComputeNormalsModifier : BaseModifier {
+  Scalar hardAngle;
+
+  UInt32 boundVersion;
+
+
+  Boolean displayDebugging;
+  Lines debugLines[];
+  DrawingHandle handle;
+};
+
+function ComputeNormalsModifier(){
+  this.hardAngle = TWO_PI;
+  this.displayDebugging = false;
+}
+
+
+function UInt32[String] ComputeNormalsModifier.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_Read;
+  result['normals'] = AttrMode_Write;
+  return result;
+}
+
+/// Sets the file path of the alembic file. 
+inline  ComputeNormalsModifier.setHardAngle!(Scalar angle){
+  this.hardAngle = angle;
+  String data;
+  this.notify('changed', data);
+}
+
+inline Vec3 computeNormalsModifier_triNrm(Vec3 vec1, Vec3 vec2){
+  Vec3 triNrm = vec2.cross(vec1);
+  Float32 lenSq = triNrm.lengthSquared();
+  if(lenSq > DIVIDEPRECISION)
+    return triNrm / sqrt(lenSq);
+  return Vec3();
+}
+
+operator computeNormalsModifier_computePointNormals<<<index>>>(
+  io PolygonMesh mesh,
+  Vec3 positionValues[],
+  io Ref<Vec3Attribute> normals,
+  Boolean displayDebugging,
+  io Lines debugLines
+){
+  Vec3 point = positionValues[index];
+
+  LocalL16UInt32Array surroundingPoints;
+  mesh.getPointSurroundingPoints( index, false, surroundingPoints );
+  UInt32 nbNei = surroundingPoints.size();
+  if(nbNei > 0){
+    Vec3 vec2, vec1 = positionValues[surroundingPoints.get(0)] - point;
+    Vec3 vec0 = vec1;
+    Vec3 nrm();
+    for(UInt32 i=1; i<surroundingPoints.size(); i++){
+      vec2 = positionValues[surroundingPoints.get(i)] - point;
+      nrm += computeNormalsModifier_triNrm(vec1, vec2);
+      vec1 = vec2;
+    }
+    nrm += computeNormalsModifier_triNrm(vec1, vec0);
+    Float32 lenSq = nrm.lengthSquared();
+    if(lenSq > DIVIDEPRECISION){
+      Vec3 normal = nrm / sqrt(lenSq);
+      mesh.setPointAttribute( index, normals, normal );
+
+      if(displayDebugging){
+        debugLines.indices[(index*2)] = (index*2);
+        debugLines.indices[(index*2)+1] = (index*2)+1;
+        debugLines.setPosition((index*2), point);
+        debugLines.setPosition((index*2)+1, point + normal);
+      }
+    }
+  }
+
+}
+
+/// Per-geometry computation of the push. 
+/// \internal
+operator computeNormalsModifier_computeGeometries<<<index>>>(
+  io GeometrySet geomSet,
+  Scalar hardAngle,
+  Boolean displayDebugging,
+  io Lines debugLines[]
+){
+  PolygonMesh mesh = geomSet.get(index);
+  if(mesh){
+
+    if(displayDebugging){
+      if(debugLines[index] == null)
+        debugLines[index] = Lines();
+      if(debugLines[index].lineCount() != mesh.pointCount()){
+        debugLines[index].attributes.resize( mesh.pointCount() * 2 );
+        debugLines[index].indices.resize( mesh.pointCount() * 2 );
+        debugLines[index].incrementVersion();
+      }
+      // Always increment the positoins version as they will be re-geomuted in the following kernel.
+      debugLines[index].incrementPositionsVersion();
+    }
+
+    Ref<Vec3Attribute> normals = mesh.getOrCreateNormals();
+    normals.incrementVersion();
+    computeNormalsModifier_computePointNormals<<<mesh.pointCount()>>>(mesh, mesh.positionsAttribute.values, normals, displayDebugging, debugLines[index]);
+    // Note: the builtin normal computation manages splitting attribtiues along hard edges,
+    // and this causes corruption of the skinning attribute. The custom implementation above
+    // is naive and assumes no hard edges, but should also run on the GPU.
+    // mesh.recomputePointNormalsIfRequired( hardAngle );
+  }
+}
+
+function ComputeNormalsModifier.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+
+  if(geomSet.getVersion() != this.boundVersion){
+    this.debugLines.resize(geomSet.size());
+    this.boundVersion = geomSet.getVersion();
+  }
+
+  computeNormalsModifier_computeGeometries<<<geomSet.size()>>>(geomSet, this.hardAngle, this.displayDebugging, this.debugLines);
+
+  if(this.displayDebugging && this.handle==null)
+    this.setupRendering();
+  else if(!this.displayDebugging && this.handle!=null)
+    this.handle = null;
+}
+
+function ComputeNormalsModifier.setupRendering!(){
+
+  // Construct a handle for this character instance. The handle will clean up the InlineDrawing when it is destroyed. 
+  this.handle = DrawingHandle("WrapModifierHandle");
+
+  // Now setup the rendering
+  InlineShader shader = this.handle.getDrawing().registerShader(OGLFlatOverlayShader());
+  InlineMaterial material = shader.getOrCreateMaterial("WrapModifierMaterial");
+
+  for(Integer geomId=0; geomId<this.debugLines.size(); geomId++){
+    String name = "WrapModifier_" + String(geomId);
+    InlineShape shape = InlineLinesShape(name, this.debugLines[geomId]);
+    InlineInstance instance = SimpleInlineInstance(name + "_Instance", this.handle.rootTransform, shape, material);
+    instance.setInstanceUniform(InlineUniform('u_color', Color(0.0,1.0,0.0)));
+  }
+}
+
+
+function JSONDictValue ComputeNormalsModifier.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json = this.parent.saveJSON(persistenceContext);
+  json.setScalar('hardAngle', this.hardAngle);
+  json.setBoolean('displayDebugging', this.displayDebugging);
+  return json;
+}
+
+function ComputeNormalsModifier.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  this.parent.loadJSON(persistenceContext, json);
+  if(json.has('hardAngle'))
+    this.hardAngle = json.getScalar('hardAngle');
+  if(json.has('displayDebugging'))
+    this.displayDebugging = json.getBoolean('displayDebugging');
+}

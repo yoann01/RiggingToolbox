@@ -1,0 +1,34 @@
+
+require RiggingToolbox;
+
+operator entry(){
+
+  StartFabricProfiling();
+
+  GeometryStack stack();
+  stack.loadJSONFile("${FABRIC_RIGGINGTOOLBOX_PATH}/Tests/GeometryStack/Resources/tubeCharacter_SkinningAndDeltaMush.json");
+
+  SkinningModifier skiningModifier = stack.getGeometryOperator(1);
+
+  EvalContext context();
+  stack.evaluate(context);
+
+  // Modify the pose and then reevaluate. 
+  Mat44 pose[];
+  pose.resize(4);
+  pose[0] = Xfo(Vec3(3, 4, 5)).toMat44();
+  pose[1] = Xfo(Vec3(10, 20, 5)).toMat44();
+  pose[2] = Xfo(Vec3(10, 20, 5)).toMat44();
+  pose[3] = Xfo(Vec3(10, 20, 5)).toMat44();
+  skiningModifier.setPose(pose);
+
+  GeometrySet geomSet = stack.evaluate(context);
+
+  StopFabricProfiling();
+
+  report( GetEvalPathReport() );
+
+  report("stack:" + stack.getDesc());
+  
+}
+

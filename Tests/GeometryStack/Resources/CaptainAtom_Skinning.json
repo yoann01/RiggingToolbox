@@ -1,0 +1,33 @@
+{
+  "geomOperators": [
+    {
+     "type": "AlembicSkinnedMeshGeometryGenerator",
+     "filePath": "D:/Resources/captainatom_project/cache/CaptainAtom.abc",
+     "geometryNames": ["captainatom_skinnedMesh_geoShape"]
+    },
+    {
+     "type": "SkinningModifier",
+     "displayDebugging": true
+    },
+    {
+     "type": "WeightmapModifier",
+     "weightmapName": "DeltaMushMask"
+    },
+    {
+     "type": "DeltaMushModifier",
+     "iterations": 30,
+     "filePath": "D:/Resources/captainatom_project/cache/CaptainAtom.abc",
+     "referenceGeometryNames": ["captainatom_skinnedMesh_geoShape"],
+     "maskWeightmapName": "DeltaMushMask",
+     "displayDebugging": true
+    },
+    {
+     "type": "ComputeNormalsModifier",
+     "displayDebugging": false
+    },
+    {
+     "type": "ComputeTangentsModifier"
+    }
+  ],
+  "displayGeometries": false
+}

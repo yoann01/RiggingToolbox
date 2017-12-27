@@ -1,0 +1,53 @@
+
+require RiggingToolbox;
+
+operator entry(){
+
+  StartFabricProfiling();
+
+  FilePath basePath = FilePath("${FABRIC_RIGGINGTOOLBOX_PATH}/Tests/GeometryStack/Resources/").expandEnvVars();
+
+  String json = "    {\n\
+    \"geomOperators\": [
+      {\n\
+       \"type\": \"AlembicGeometryGenerator\",\n\
+       \"filePath\": \"sphereBlendShapes.abc\",\n\
+       \"geometryNames\": [\"SphereRefShape\"]
+      },
+      {\n\
+       \"type\": \"BlendShapesModifier\",\n\
+       \"filePath\": \"sphereBlendShapes.abc\",\n\
+       \"referenceGeometryName\": \"SphereRefShape\",\n\
+       \"targetGeometryNames\": [\"SphereRefTarget*\"]\n\
+       \"displayDebugging\": true\n\
+      }
+    ]
+  }";
+
+  GeometryStack stack();
+  PersistenceContext persistenceContext();
+  persistenceContext.filePath = basePath.string();
+  stack.loadJSONString(persistenceContext, json);
+
+  BlendShapesModifier blendShapesModifier = stack.getGeometryOperator(1);
+
+  EvalContext context();
+  stack.evaluate(context);
+
+  // Modify the blend params and then reevaluate.
+  Scalar weights[];
+  weights.resize(2);
+  weights[0] = 0.65;
+  weights[1] = 1.0;
+  blendShapesModifier.setBlendWeights(weights);
+
+  GeometrySet geomSet = stack.evaluate(context);
+
+  StopFabricProfiling();
+
+  report( GetEvalPathReport() );
+
+  report("stack:" + stack.getDesc());
+
+}
+

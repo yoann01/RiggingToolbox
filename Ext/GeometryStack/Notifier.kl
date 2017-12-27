@@ -1,0 +1,44 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+/// An object that emit notifications.
+object Notifier {
+  /// The array of registered listeners. 
+  /// \note all listeners recieve all notifications. 
+  /// It is the responsibility of the listener to filter based on the type of the notification.
+  Listener listeners[];
+};
+
+function Notifier.addListener!(Listener listener){
+  for(Integer i=0; i<this.listeners.size(); i++){
+    if(this.listeners[i] === listener)
+      return;
+  }
+  this.listeners.push(listener);
+}
+
+function Notifier.removeListener!(Listener listener){
+  for(Integer i=0; i<this.listeners.size(); i++){
+    if(this.listeners[i] === listener){
+      for(Integer j=i; i<this.listeners.size()-1; i++){
+        this.listeners[j] = this.listeners[j+1];
+      }
+      this.listeners.resize(this.listeners.size()-1);
+      break;
+    }
+  }
+}
+
+
+function Notifier.notify(String type, String data){
+  for(Integer i=0; i<this.listeners.size(); i++){
+    // Cast the listener to an non-const value.
+    Ref<Listener> listener = this.listeners[i];
+    listener.notify(this, type, data);
+  }
+}
+

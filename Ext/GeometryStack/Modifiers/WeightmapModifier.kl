@@ -1,0 +1,168 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+require Manipulation;
+
+
+//////////////////////////////////////
+// Factory definition.
+
+object WeightmapModifierFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator WeightmapModifierFactory.constructGeometryOperator(){
+  WeightmapModifier geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+object WeightmapModifier;
+
+object WeightmapPaintManipulator : SurfaceAttributePaintManipulator {
+  WeightmapModifier modifier;
+  UInt32 offset;
+  String graphName;
+};
+
+function WeightmapPaintManipulator(WeightmapModifier modifier){
+  this.init();
+  this.attributeName = "WeightMap";
+  this.modifier = modifier;
+}
+
+/// Invoked by the SurfacePaintManipulator during painting for each mouse move event.
+/// the collectedPoints struct contains the points, distances and weights
+/// of the points in the geometry that are within the volume of the paint brush.
+function WeightmapPaintManipulator.onPaint!(io MouseEvent mouseEvent, SurfacePaintManipulator_PointCollection collectedPoints){
+  this.parent.onPaint( mouseEvent, collectedPoints);
+  // Notify the WeightmapModifier that its data has been modified by painting. 
+  // This will cause the modifier to emit a notification that will dirty the stack. 
+  this.modifier.onPainted();
+
+  // Call a method in Maya to force te re-evaluation of the scene. 
+  // We have an 'eval' port on the stack node that we can randomly change here.
+  // String value = mathRandomFloat32(6845514, ++this.offset);
+  // if(value.startsWith('+'))
+  //   value = value.leftStrip(1);
+  // if(mouseEvent.getHost().getHostName() == 'Maya'){
+  //   // Generate a command that will change the attribute value back in Maya.
+  //   String args[];
+  //   args.push('"' + this.graphName + '.eval"');
+  //   args.push(value);
+  //   mouseEvent.getHost().callCustomCommand('setAttr', args);
+  // }
+  // else if(mouseEvent.getHost().getHostName() == 'Softimage'){
+  //   String args[];
+  //   args.push(this.graphName + '.eval');
+  //   args.push(value);
+  //   mouseEvent.getHost().callCustomCommand('setValue', args);
+  // }
+}
+
+
+//////////////////////////////////////
+//
+
+
+object WeightmapModifier : BaseModifier {
+  Weightmap2 weightmap;
+  Boolean activateManipulator;
+  Boolean display;
+  UInt32 boundVersion;
+};
+
+function WeightmapModifier(){
+  this.weightmap = Weightmap2();
+  this.weightmap.paintManipulator = WeightmapPaintManipulator(this);
+  this.activateManipulator = true;
+  this.display = true;
+}
+
+
+function UInt32[String] WeightmapModifier.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_Read;
+  result[this.weightmap.getName()] = AttrMode_Write;
+  return result;
+}
+
+
+function WeightmapModifier.setActivateManipulator!(Boolean activateManipulator){
+  if(this.activateManipulator != activateManipulator){
+    this.activateManipulator = activateManipulator;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+function WeightmapModifier.setDisplay!(Boolean display){
+  if(this.display != display){
+    this.display = display;
+    String data;
+    this.notify('changed', data);
+  }
+}
+
+function WeightmapModifier.onPainted!(){
+  String data;
+  this.notify('changed', data);
+}
+
+
+function WeightmapModifier.evaluate!(EvalContext context, io GeometrySet geomSet){
+  AutoProfilingEvent p(FUNC);
+
+  if(geomSet.getVersion() != this.boundVersion){
+    for(Integer i=0; i<geomSet.size(); i++){
+      PolygonMesh mesh = geomSet.get(i);
+      if(!mesh)
+        report("Warning in WeightmapModifier. Geometry in the stack is not a PolygonMesh.");
+      else
+        this.weightmap.connect(mesh, Xfo(), i);
+    }
+
+    WeightmapPaintManipulator manipulator = this.weightmap.paintManipulator;
+    manipulator.graphName = context.graph;
+    this.boundVersion = geomSet.getVersion();
+  }
+
+  this.weightmap.display(this.display);
+
+  if(this.activateManipulator)
+    this.weightmap.activateManipulator();
+  else
+    this.weightmap.deactivateManipulator();
+}
+
+
+function JSONDictValue WeightmapModifier.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json = this.parent.saveJSON(persistenceContext);
+  json.setString('weightmapName', this.weightmap.getName());
+
+  json.set('weightmap', this.weightmap.saveJSON(persistenceContext));
+
+  return json;
+}
+
+function WeightmapModifier.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  this.parent.loadJSON(persistenceContext, json);
+
+  if(json.has('weightmapName'))
+    this.weightmap.setName(json.getString('weightmapName'));
+
+  if(json.has('display'))
+    this.display = json.getBoolean('display');
+
+  if(json.has('activateManipulator'))
+    this.activateManipulator = json.getBoolean('activateManipulator');
+
+  if(json.has('weightmap'))
+    this.weightmap.loadJSON(persistenceContext, json.get('weightmap'));
+}
+
+

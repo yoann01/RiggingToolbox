@@ -1,0 +1,58 @@
+
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+
+/**
+  
+
+  \seealso GeometrySet, GeometryStack
+*/
+interface Generator {
+};
+
+object BaseGenerator : Notifier, Generator, GeometryOperator {
+
+};
+
+function BaseGenerator(){
+
+}
+
+
+function UInt32[String] BaseGenerator.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_Write;
+  return result;
+}
+
+
+function BaseGenerator.evaluate!(EvalContext context, io GeometrySet geomSet){
+
+}
+
+function JSONDictValue BaseGenerator.saveJSON(PersistenceContext persistenceContext){
+  JSONDictValue json();
+
+  json.setString("type", String(this.type()));
+
+  return json;
+}
+
+function BaseGenerator.loadJSON!(PersistenceContext persistenceContext, JSONDictValue json){
+  
+}
+
+
+/// Generates a Description string of this generator.
+/// \param indent The indentation to use when generating the string. 
+function String BaseGenerator.getDesc(String indent) {
+  String desc;
+  desc += indent + "{\n";
+  desc += indent + "  type: "+ this.type() + "\n";
+  desc += indent + "}";
+  return desc;
+}

@@ -1,0 +1,43 @@
+loadTargetsFromBinCache:D:/Projects/FabricEngineInc/RiggingToolbox/Tests/GeometryStack/Resources/sphereBlendShapes.blendShapes
+Importing:D:/Projects/FabricEngineInc/RiggingToolbox/Tests/GeometryStack/Resources/sphereBlendShapes.abc
+BlendShapesModifier cannot evaluate because the number of weights:0 does not match the number of targets:2
+numActiveShapes:0
+numActiveShapes:2
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryCache.update!(io GeometrySet, GeometryOperator)
+--function AlembicGeometryGenerator.evaluate!(EvalContext, io GeometrySet)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Update:positions
+--function BlendShapesModifier.evaluate!(EvalContext, io GeometrySet)
+----function blendShapesModifier_deformGeometries(Index, io GeometrySet, BlendShapesModifier_Target[][], Scalar[], Scalar, Boolean, Color[], io UInt32)
+function GeometryStack.notify!(Notifier, String, String):BlendShapesModifier.changed
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Restore:positions
+--function BlendShapesModifier.evaluate!(EvalContext, io GeometrySet)
+----function blendShapesModifier_deformGeometries(Index, io GeometrySet, BlendShapesModifier_Target[][], Scalar[], Scalar, Boolean, Color[], io UInt32)
+
+stack:GeometryStack {
+  geomOperators:[
+    {
+      type: AlembicGeometryGenerator,
+      filePath: sphereBlendShapes.abc
+      expandedPath: D:/Projects/FabricEngineInc/RiggingToolbox/Tests/GeometryStack/Resources/sphereBlendShapes.abc
+    }
+    {
+      type: BlendShapesModifier,
+      filePath: sphereBlendShapes.abc
+      refGeoms: 1
+        blendTargets: 0:2
+    }
+  ],
+  geomSet:   {
+    geometries:[
+      SphereRefShape:{
+      },
+    ]
+    attributeGenerations:{
+      positions:2,
+    },
+  }
+}

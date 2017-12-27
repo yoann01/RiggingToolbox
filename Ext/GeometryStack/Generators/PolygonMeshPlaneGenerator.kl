@@ -1,0 +1,55 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+require Geometry;
+require FabricStatistics;
+
+//////////////////////////////////////
+// Factory definition.
+
+object PolygonMeshPlaneGeneratorFactory : GeometryOperatorFactory {
+};
+
+function GeometryOperator PolygonMeshPlaneGeneratorFactory.constructGeometryOperator(){
+  PolygonMeshPlaneGenerator geomOp();
+  return geomOp;
+}
+
+
+//////////////////////////////////////
+//
+
+object PolygonMeshPlaneGenerator : BaseGenerator {
+  Scalar length;
+  Scalar width;
+  UInt32 lengthSections;
+  UInt32 widthSections;
+  Boolean normals;
+  Boolean uvs;
+
+};
+
+function PolygonMeshPlaneGenerator(){
+}
+
+function UInt32[String] PolygonMeshPlaneGenerator.getAttributeInteractions(){
+  UInt32 result[String];
+  result['positions'] = AttrMode_Write;
+  if(this.normals)
+    result['normals'] = AttrMode_Write;
+  if(this.uvs)
+    result['uvs0'] = AttrMode_Write;
+  return result;
+}
+
+
+function PolygonMeshPlaneGenerator.evaluate!(EvalContext context, io GeometrySet geomSet){
+  PolygonMesh mesh();
+  mesh.addPlane(Xfo(), this.length, this.width, this.lengthSections, this.widthSections, this.normals, this.uvs);
+  geomSet.resize(1);
+  geomSet.set(0, mesh);
+}
+
+

@@ -1,0 +1,157 @@
+/*
+ *  Copyright 2010-2014 Fabric Engine Inc. All rights reserved.
+ */
+
+require Math;
+
+/**
+\versionadded 1.12.0
+
+The OGLVertexColorOverlayShader2 is used for rendering surface attributes as a semitransparent colored overlay on top of existing geometry.
+It offsets the overlay geometry in the -Z space to ensure no z-fighting occurs between the underlying geometry and the overlay.
+
+This shader is often used to display multi-channel maps over the top of geometry in the viewport.  
+
+\rst
+Uniforms
+----------
+==================== ============ ===================================== ==================================
+Name                 Type         Description                           Default
+==================== ============ ===================================== ==================================
+u_light0Position     Vec3         Position of the first light           Position of the camera
+u_light0Color        Color        Color of the first light              Color(1.0, 1.0, 1.0)
+u_specularFactor     Color        Specular distribution factor          16.0
+u_normalIsTangent    Integer      Flag defining normal type             0
+u_doubleSided        Integer      Flag defining backface shading model  0
+==================== ============ ===================================== ==================================
+
+Attributes
+----------
+=============== ============ =====================================
+Name            Type         Description
+=============== ============ =====================================
+positions       Vec3         Geometry positions
+normals         Vec3         Geometry normals
+vertexColors    Color        Color per vertex
+=============== ============ =====================================
+\endrst
+
+\example
+  InlineDrawing draw = OGLInlineDrawing();
+  InlineShader shader = draw.registerShader(OGLVertexColorOverlayShader2());
+  InlineMaterial mat = shader.getOrCreateMaterial('vertexColors');
+\endexample
+*/
+object OGLVertexColorOverlayShader2 : OGLSurfaceOverlayShader {};
+
+/// default constructor
+function OGLVertexColorOverlayShader2() {
+  // Avoid calling the init method if this default constructor is being invoked 
+  // during the construction of a derived object.
+  if(this.type() == OGLVertexColorOverlayShader2)
+    this.init(String(this.type()), 'vertexColors');
+}
+
+/// constructor taking a name
+function OGLVertexColorOverlayShader2(String name) {
+  this.init(name, 'vertexColors');
+}
+
+/// constructor taking a name and vertexColorsAttrName
+function OGLVertexColorOverlayShader2(String name, String vertexColorsAttrName) {
+  this.init(name, vertexColorsAttrName);
+}
+
+/// initialize the shader using a name.
+/// \internal
+function OGLVertexColorOverlayShader2.init!(String name, String vertexColorsAttrName) {
+  this.name = name;
+  this.setVertexCode("
+      #version 120 // We require OpenGL 2.1 for InlineDrawing, which supports GLSL 1.2
+      
+      uniform mat4 u_viewMatrix;
+      uniform mat4 u_projection;
+      uniform mat4 u_modelMatrix;
+      uniform mat3 u_normalMatrix;
+
+      uniform vec3 u_light0Position;
+      uniform vec4 u_light0Color;
+
+      attribute vec4 positions;
+      attribute vec3 normals;
+      attribute vec4 XXX_VERTEXCOLORS_XXX;
+
+      varying vec3 v_normal;
+      varying vec4 v_position;
+      varying vec3 v_lightDir;
+      varying vec4 v_lightColor;
+      varying vec3 v_eyeVec;
+      varying vec4 v_vertexColor;
+
+      void main(){
+        v_normal = u_normalMatrix * normals;
+        v_position = u_modelMatrix * positions;
+        vec4 v_positionInv = (u_viewMatrix * vec4(v_position.xyz, 1.0));
+        gl_Position = u_projection * v_positionInv;
+  
+        v_lightDir = (u_viewMatrix * vec4(u_light0Position, 1.0)).xyz - v_positionInv.xyz;
+        v_lightColor = u_light0Color;
+        v_eyeVec = -v_positionInv.xyz;
+        v_vertexColor = XXX_VERTEXCOLORS_XXX;
+      }
+    ".replace('XXX_VERTEXCOLORS_XXX', vertexColorsAttrName));
+  this.setFragmentCode("
+      #version 120 // We require OpenGL 2.1 for InlineDrawing, which supports GLSL 1.2
+      
+      uniform int u_normalIsTangent;
+      uniform int u_doubleSided;
+
+      varying vec3 v_normal;
+      varying vec4 v_position;
+      varying vec3 v_lightDir;
+      varying vec4 v_lightColor;
+      varying vec3 v_eyeVec;
+      varying vec4 v_vertexColor;
+
+      void main() {
+        vec4 final_color = vec4(0.0, 0.0, 0.0, 0.0);
+        
+
+        vec3 N;
+        if(u_normalIsTangent == 0)
+          N = normalize(v_normal);
+        else
+        {
+          N = normalize(cross(v_normal, cross(v_normal, v_eyeVec)));
+        }
+        if(dot(N, v_eyeVec) < 0.0)
+          N = -N;
+        vec3 L = normalize(v_lightDir);
+
+        float lambertTerm = dot(N,L);
+        if(u_doubleSided != 0)
+          lambertTerm = abs(lambertTerm);
+        
+        if(lambertTerm > 0.0)
+        {
+          final_color += v_lightColor * v_vertexColor * lambertTerm; 
+        }
+        final_color.w = v_vertexColor.w;
+        gl_FragColor = final_color;
+      }
+    ");  
+  this.defineUniform(InlineUniform("u_viewMatrix", Mat44()));
+  this.defineUniform(InlineUniform("u_projection", Mat44()));
+  this.defineUniform(InlineUniform("u_modelMatrix", Mat44()));
+  this.defineUniform(InlineUniform("u_normalMatrix", Mat33()));
+
+  this.defineUniform(InlineUniform("u_light0Position", Vec3(100, 100, 100)));
+  this.defineUniform(InlineUniform("u_light0Color", Color(1.0, 1.0, 1.0)));
+
+  this.defineUniform(InlineUniform("u_normalIsTangent", Integer(0)));
+  this.defineUniform(InlineUniform("u_doubleSided", Integer(0)));
+
+  this.defineAttribute('positions', "Vec3");
+  this.defineAttribute('normals', "Vec3");
+  this.defineAttribute(vertexColorsAttrName, "Color");
+}

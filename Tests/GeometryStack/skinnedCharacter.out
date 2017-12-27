@@ -1,0 +1,16 @@
+Importing:D:/Projects/FabricEngineInc/RiggingToolbox/Tests/GeometryStack/Resources/skinnedTube.abc
+Warning: Pose count does not match the reference pose count. referencePose:4 != pose:2. Skinning disabled
+function GeometryStack.notify!(Notifier, String, String):AlembicSkinnedMeshGeometryGenerator.changed
+function GeometryStack.notify!(Notifier, String, String):AlembicSkinnedMeshGeometryGenerator.changed
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryCache.update!(io GeometrySet, GeometryOperator)
+--function AlembicSkinnedMeshGeometryGenerator.evaluate!(EvalContext, io GeometrySet)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Update:positions
+--function SkinningModifier.evaluate!(EvalContext, io GeometrySet)
+function GeometryStack.notify!(Notifier, String, String):SkinningModifier.changed
+function GeometrySet GeometryStack.evaluate!(EvalContext)
+--function GeometryAttributeCache.update!(io GeometrySet, GeometryOperator):["positions"]
+----Restore:positions
+--function SkinningModifier.evaluate!(EvalContext, io GeometrySet)
+
